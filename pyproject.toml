@@ -1,0 +1,22 @@
+[project]
+name = "fpv-mocap"
+version = "0.1.0"
+description = "First-person video to first-person arms animation for Lone Asset"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "numpy>=2.0",
+    "opencv-python>=4.10",
+]
+
+[project.scripts]
+mocap = "mocap.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mocap"]

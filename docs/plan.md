@@ -90,7 +90,7 @@ between bones so constraints see the new values.
 
 Each one ends with something to look at.
 
-- M0 Setup: uv project, `frames` and `camera` stages, one test clip. Check: frames on disk,
+- M0 Setup (done): uv project, `frames` and `camera` stages, one test clip. Check: frames on disk,
   `camera.json` plausible (principal point near the centre).
 - M1 Gun: `gun_markers` on a self-recorded clip. Check: overlay shows the gun's outline staying on
   the replica through the reload.
