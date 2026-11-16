@@ -9,7 +9,8 @@ import numpy as np
 
 from mocap import align, frames, overlay, sheets
 from mocap.camera import Camera, calibrate, intrinsics_from_fov
-from mocap.contracts import ContractError, load_gun, load_hands
+from mocap.contracts import ContractError, load_aligned, load_gun, load_hands
+from mocap.transforms import relative
 
 CLIPS = Path("clips")
 
@@ -55,22 +56,38 @@ def cmd_sheets(args: argparse.Namespace) -> None:
 def cmd_align(args: argparse.Namespace) -> None:
     clip = _clip_dir(args.clip)
     try:
-        aligned = align.run(load_gun(clip / "gun.npz"), load_hands(clip / "hands.npz"))
+        gun = load_gun(clip / "gun.npz")
+        hands = load_hands(clip / "hands.npz")
+        aligned = align.run(gun, hands, eps_t=args.eps_t, eps_r=math.radians(args.eps_r_deg))
     except ContractError as e:
         raise SystemExit(str(e))
     np.savez(clip / "aligned.npz", **aligned)
-    gripping = {s: int((aligned[f"{s}_grip_weight"] > 0.5).sum()) for s in ("left", "right")}
-    print(f"gun valid on {int(aligned['gun_valid'].sum())} of {len(aligned['gun_valid'])} frames; "
-          f"gripping frames {gripping} -> {clip / 'aligned.npz'}")
+    print(f"gun valid on {int(aligned['gun_valid'].sum())} of {len(aligned['gun_valid'])} frames "
+          f"-> {clip / 'aligned.npz'}")
+    for side in ("left", "right"):
+        count = int((aligned[f"{side}_grip_weight"] > 0.5).sum())
+        both = gun["valid"] & hands[side]["valid"]
+        if both.any():
+            rel = relative(gun["T_cam_gun"][both], hands[side]["T_cam_wrist"][both])
+            dist = f"{float(np.median(np.linalg.norm(rel[:, :3, 3], axis=1))):.2f} m"
+        else:
+            dist = "n/a (no frame with both gun and hand valid)"
+        print(f"{side}: gripping {count} frames, median wrist-to-gun distance {dist}")
+        if count == 0:
+            print(f"  hint: no grip found for {side}; try a larger --eps-t (now {args.eps_t:g} m) "
+                  f"or --eps-r-deg (now {args.eps_r_deg:g})")
 
 
 def cmd_overlay(args: argparse.Namespace) -> None:
     clip = _clip_dir(args.clip)
-    for needed in ("camera.json", "aligned.npz"):
-        if not (clip / needed).exists():
-            raise SystemExit(f"{clip / needed} not found")
-    count = overlay.write_video(clip / "rgb", Camera.load(clip / "camera.json"),
-                                dict(np.load(clip / "aligned.npz")), clip / "overlay.mp4")
+    if not (clip / "camera.json").exists():
+        raise SystemExit(f"{clip / 'camera.json'} not found")
+    try:
+        aligned = load_aligned(clip / "aligned.npz")
+    except ContractError as e:
+        raise SystemExit(str(e))
+    count = overlay.write_video(clip / "rgb", Camera.load(clip / "camera.json"), aligned,
+                                clip / "overlay.mp4")
     print(f"{count} frames -> {clip / 'overlay.mp4'}")
 
 
@@ -100,6 +117,8 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("align", help="join gun.npz and hands.npz into aligned.npz")
     p.add_argument("clip")
+    p.add_argument("--eps-t", type=float, default=0.01, help="grip: max wrist drift in the gun frame, metres")
+    p.add_argument("--eps-r-deg", type=float, default=8.0, help="grip: max wrist rotation drift, degrees")
     p.set_defaults(func=cmd_align)
 
     p = sub.add_parser("overlay", help="draw aligned.npz onto the frames as overlay.mp4")

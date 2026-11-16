@@ -61,3 +61,49 @@ def test_frame_count_must_match_across_fields(tmp_path: Path):
 def test_missing_file_is_a_contract_error(tmp_path: Path):
     with pytest.raises(ContractError, match="gun.npz"):
         load_gun(tmp_path / "gun.npz")
+
+
+def test_garbage_npz_is_a_contract_error(tmp_path: Path):
+    (tmp_path / "gun.npz").write_bytes(b"not a zip at all")
+    with pytest.raises(ContractError, match="gun.npz"):
+        load_gun(tmp_path / "gun.npz")
+
+
+def test_truncated_npz_is_a_contract_error(tmp_path: Path):
+    save_gun(tmp_path / "gun.npz", _gun(5))
+    raw = (tmp_path / "gun.npz").read_bytes()
+    (tmp_path / "gun.npz").write_bytes(raw[: len(raw) // 2])
+    with pytest.raises(ContractError, match="gun.npz"):
+        load_gun(tmp_path / "gun.npz")
+
+
+def test_npy_is_a_contract_error(tmp_path: Path):
+    np.save(tmp_path / "gun.npz.npy", np.zeros(3))
+    (tmp_path / "gun.npz.npy").rename(tmp_path / "gun.npz")
+    with pytest.raises(ContractError, match="gun.npz"):
+        load_gun(tmp_path / "gun.npz")
+
+
+def _aligned_arrays(n: int) -> dict:
+    out = {"gun_valid": np.ones(n, bool), "gun_source": np.zeros(n, np.int8),
+           "T_cam_gun": np.tile(np.eye(4), (n, 1, 1))}
+    for side in ("left", "right"):
+        out[f"{side}_T_cam_wrist"] = np.tile(np.eye(4), (n, 1, 1))
+        out[f"{side}_keypoints"] = np.zeros((n, 21, 3))
+        out[f"{side}_valid"] = np.ones(n, bool)
+        out[f"{side}_grip_weight"] = np.zeros(n)
+    return out
+
+
+def test_load_aligned_round_trip_and_errors(tmp_path: Path):
+    from mocap.contracts import load_aligned
+
+    np.savez(tmp_path / "aligned.npz", **_aligned_arrays(3))
+    assert load_aligned(tmp_path / "aligned.npz")["T_cam_gun"].shape == (3, 4, 4)
+    broken = _aligned_arrays(3)
+    del broken["left_grip_weight"]
+    np.savez(tmp_path / "bad.npz", **broken)
+    with pytest.raises(ContractError, match="left_grip_weight"):
+        load_aligned(tmp_path / "bad.npz")
+    with pytest.raises(ContractError, match="nope.npz"):
+        load_aligned(tmp_path / "nope.npz")

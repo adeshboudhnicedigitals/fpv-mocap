@@ -135,3 +135,41 @@ def test_run_rejects_mismatched_frame_counts():
     gun = {k: v[:50] for k, v in gun.items()}
     with pytest.raises(ContractError, match="gun has 50"):
         run(gun, hands)
+
+
+def test_run_tolerates_zeros_on_invalid_frames():
+    gun, hands, _, _ = _synthetic()
+    gun["valid"][5:10] = False
+    hands["left"]["valid"][20:25] = False
+    hands["right"]["valid"][40:45] = False
+    gun_i = {k: v.copy() for k, v in gun.items()}
+    hands_i = {s: {k: v.copy() for k, v in h.items()} for s, h in hands.items()}
+    gun_i["T_cam_gun"][5:10] = np.eye(4)
+    hands_i["left"]["T_cam_wrist"][20:25] = np.eye(4)
+    hands_i["left"]["finger_rot"][20:25] = np.eye(3)
+    hands_i["right"]["T_cam_wrist"][40:45] = np.eye(4)
+    hands_i["right"]["finger_rot"][40:45] = np.eye(3)
+    gun_z = {k: v.copy() for k, v in gun_i.items()}
+    hands_z = {s: {k: v.copy() for k, v in h.items()} for s, h in hands_i.items()}
+    gun_z["T_cam_gun"][5:10] = 0
+    hands_z["left"]["T_cam_wrist"][20:25] = 0
+    hands_z["left"]["finger_rot"][20:25] = 0
+    hands_z["right"]["T_cam_wrist"][40:45] = 0
+    hands_z["right"]["finger_rot"][40:45] = 0
+    before = gun_z["T_cam_gun"].copy()
+    expected = run(gun_i, hands_i)
+    out = run(gun_z, hands_z)
+    assert np.array_equal(gun_z["T_cam_gun"], before)  # inputs not mutated
+    assert np.all(hands_z["left"]["T_cam_wrist"][20:25] == 0)
+    for key, val in expected.items():
+        assert np.allclose(out[key], val), key
+    assert np.allclose(out["left_T_cam_wrist"][20:25], np.eye(4))
+
+
+def test_run_grip_thresholds_change_the_weight():
+    gun, hands, _, _ = _synthetic()
+    rng = np.random.default_rng(2)
+    hands["right"]["T_cam_wrist"][:, :3, 3] += rng.normal(0, 0.01, (60, 3))
+    tight = run(gun, hands, eps_t=1e-4)["right_grip_weight"]
+    loose = run(gun, hands, eps_t=0.2)["right_grip_weight"]
+    assert (loose > 0.5).sum() > (tight > 0.5).sum()

@@ -21,20 +21,27 @@ def _pt(uv: np.ndarray) -> tuple[int, int]:
     return int(round(uv[0])), int(round(uv[1]))
 
 
+AXIS_COLOURS = [(0, 0, 255), (0, 255, 0), (255, 0, 0)]  # BGR: x red, y green, z blue
+WRIST_AXIS_LENGTH_M = 0.05
+
+
+def _draw_axes(out: np.ndarray, K: np.ndarray, T: np.ndarray, length: float, colours, thickness: int) -> None:
+    tips = np.vstack([np.zeros(3), np.eye(3) * length])
+    cam = tips @ T[:3, :3].T + T[:3, 3]
+    if cam[0, 2] <= MIN_DEPTH_M:
+        return
+    origin = _pt(project(K, cam[:1])[0])
+    for k in range(3):
+        if cam[k + 1, 2] > MIN_DEPTH_M:
+            cv2.line(out, origin, _pt(project(K, cam[k + 1:k + 2])[0]), colours[k], thickness)
+
+
 def draw_frame(img: np.ndarray, K: np.ndarray, aligned: dict, i: int) -> np.ndarray:
     out = img.copy()
     if aligned["gun_valid"][i]:
-        T = aligned["T_cam_gun"][i]
-        tips = np.vstack([np.zeros(3), np.eye(3) * AXIS_LENGTH_M])
-        cam = tips @ T[:3, :3].T + T[:3, 3]
         from_hand = aligned["gun_source"][i] == 1
-        colours = [(0, 0, 255), (0, 255, 0), (255, 0, 0)]  # BGR: x red, y green, z blue
-        if cam[0, 2] > MIN_DEPTH_M:
-            origin = _pt(project(K, cam[:1])[0])
-            for k in range(3):
-                if cam[k + 1, 2] > MIN_DEPTH_M:
-                    tip = _pt(project(K, cam[k + 1:k + 2])[0])
-                    cv2.line(out, origin, tip, (0, 255, 255) if from_hand else colours[k], 3)
+        colours = [(0, 255, 255)] * 3 if from_hand else AXIS_COLOURS
+        _draw_axes(out, K, aligned["T_cam_gun"][i], AXIS_LENGTH_M, colours, 3)
     for side in ("left", "right"):
         if not aligned[f"{side}_valid"][i]:
             continue
@@ -46,6 +53,7 @@ def draw_frame(img: np.ndarray, K: np.ndarray, aligned: dict, i: int) -> np.ndar
             w = float(aligned[f"{side}_grip_weight"][i])
             wrist = project(K, wrist_cam[None])[0]
             cv2.circle(out, _pt(wrist), 10, (0, int(255 * w), int(255 * (1 - w))), 3)  # red free -> green locked
+        _draw_axes(out, K, aligned[f"{side}_T_cam_wrist"][i], WRIST_AXIS_LENGTH_M, AXIS_COLOURS, 2)
     return out
 
 

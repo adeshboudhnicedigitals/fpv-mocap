@@ -78,11 +78,38 @@ def smooth_fingers(finger_rot: np.ndarray, valid: np.ndarray, window: int = 9, o
     return Rotation.from_rotvec(vec.reshape(-1, 3)).as_matrix().reshape(n, 15, 3, 3)
 
 
-def run(gun: dict[str, np.ndarray], hands: dict[str, dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
-    """Produce the contents of aligned.npz from gun and hands data (see Interfaces in the plan)."""
+def _identity_where_invalid(arr: np.ndarray, valid: np.ndarray) -> np.ndarray:
+    """Copy of arr (N, ..., r, r) with the trailing square matrix set to identity where valid is False."""
+    out = arr.copy()
+    out[~valid] = np.eye(arr.shape[-1])
+    return out
+
+
+def run(
+    gun: dict[str, np.ndarray],
+    hands: dict[str, dict[str, np.ndarray]],
+    eps_t: float = 0.01,
+    eps_r: float = np.radians(8),
+) -> dict[str, np.ndarray]:
+    """Produce the contents of aligned.npz from gun and hands data (see Interfaces in the plan).
+
+    Poses on frames where their `valid` flag is False are ignored (they may be zeros or garbage): the
+    inputs are not mutated, and those frames hold identity in the outputs (T_cam_gun unless filled from
+    the right hand, and each side's T_cam_wrist). finger_rot on invalid frames is interpolated from
+    neighbouring valid frames. eps_t (metres) and eps_r (radians) are the grip detection thresholds.
+    """
     counts = (len(gun["T_cam_gun"]), len(hands["left"]["T_cam_wrist"]), len(hands["right"]["T_cam_wrist"]))
     if len(set(counts)) != 1:
         raise ContractError(f"gun has {counts[0]} frames, left hand {counts[1]}, right hand {counts[2]}")
+    gun = {**gun, "T_cam_gun": _identity_where_invalid(gun["T_cam_gun"], gun["valid"])}
+    hands = {
+        side: {
+            **h,
+            "T_cam_wrist": _identity_where_invalid(h["T_cam_wrist"], h["valid"]),
+            "finger_rot": _identity_where_invalid(h["finger_rot"], h["valid"]),
+        }
+        for side, h in hands.items()
+    }
     T_gun = gun["T_cam_gun"].copy()
     gun_valid = gun["valid"].copy()
     source = np.where(gun_valid, 0, -1).astype(np.int8)
@@ -92,7 +119,7 @@ def run(gun: dict[str, np.ndarray], hands: dict[str, dict[str, np.ndarray]]) -> 
         h = hands[side]
         both = gun["valid"] & h["valid"]
         rel[side] = relative(gun["T_cam_gun"], h["T_cam_wrist"])
-        weight[side] = grip_weight(rel[side], both)
+        weight[side] = grip_weight(rel[side], both, eps_t=eps_t, eps_r=eps_r)
         offset[side] = grip_offset(rel[side], weight[side])
 
     right = hands["right"]

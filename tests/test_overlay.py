@@ -85,3 +85,15 @@ def test_draw_frame_keypoint_at_zero_depth_does_not_raise():
     aligned = _aligned()
     aligned["left_keypoints"][0, 0] = [0.0, 0.0, 0.0]
     draw_frame(img, _camera().K, aligned, 0)
+
+
+def test_draw_frame_draws_wrist_axes():
+    aligned = _aligned()
+    aligned["T_cam_gun"][:, 2, 3] = 5.0  # park the gun axes away from the wrist
+    aligned["left_valid"][:] = False
+    aligned["right_keypoints"][:] = [0.0, 0.0, 5.0]
+    aligned["right_T_cam_wrist"][:, 2, 3] = 1.0
+    img = np.zeros((1080, 1920, 3), np.uint8)
+    out = draw_frame(img, K, aligned, 0)
+    tip = project(K, np.array([[0.05, 0.0, 1.0]]))[0]  # 0.05 m x axis: 48 px right of centre
+    assert tuple(out[int(round(tip[1])), int(round(tip[0]))]) == (0, 0, 255)

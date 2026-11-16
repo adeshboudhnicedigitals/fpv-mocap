@@ -42,3 +42,36 @@ def test_align_without_inputs_fails_with_a_message(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "CLIPS", tmp_path)
     with pytest.raises(SystemExit, match="gun.npz"):
         cli.main(["align", "c"])
+
+
+def test_overlay_with_incomplete_aligned_fails_with_a_message(tmp_path, monkeypatch):
+    clip = _make_clip(tmp_path)
+    monkeypatch.setattr(cli, "CLIPS", tmp_path)
+    cli.main(["align", "c"])
+    data = dict(np.load(clip / "aligned.npz"))
+    del data["right_keypoints"]
+    np.savez(clip / "aligned.npz", **data)
+    with pytest.raises(SystemExit, match="right_keypoints"):
+        cli.main(["overlay", "c"])
+
+
+def test_align_prints_wrist_to_gun_distance(tmp_path, monkeypatch, capsys):
+    _make_clip(tmp_path)
+    monkeypatch.setattr(cli, "CLIPS", tmp_path)
+    cli.main(["align", "c"])
+    out = capsys.readouterr().out
+    assert "right: gripping 12 frames, median wrist-to-gun distance 0.00 m" in out
+    assert "left: gripping 12 frames" in out
+
+
+def test_align_hints_when_nothing_grips(tmp_path, monkeypatch, capsys):
+    clip = _make_clip(tmp_path)
+    monkeypatch.setattr(cli, "CLIPS", tmp_path)
+    hands = dict(np.load(clip / "hands.npz"))
+    hands["right_T_cam_wrist"] = hands["right_T_cam_wrist"].copy()
+    hands["right_T_cam_wrist"][:, 0, 3] = np.arange(12) * 0.1
+    np.savez(clip / "hands.npz", **hands)
+    cli.main(["align", "c"])
+    out = capsys.readouterr().out
+    assert "right: gripping 0 frames" in out
+    assert "--eps-t" in out and "--eps-r-deg" in out
