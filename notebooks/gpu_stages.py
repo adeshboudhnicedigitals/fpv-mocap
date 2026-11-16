@@ -162,6 +162,13 @@ print({s: int(hands[s]["valid"].sum()) for s in hands}, "valid frames of", N)
 print("check boxes in", CLIP / "hand_check")
 
 # %% depth: Depth Anything V2 metric (run from the cloned metric_depth folder; ADAPTER)
+if not DA_DIR.exists():
+    subprocess.run(["git", "clone", "https://github.com/DepthAnything/Depth-Anything-V2", str(DA_DIR.parent)], check=True)
+ckpt = DA_DIR / "checkpoints" / "depth_anything_v2_metric_hypersim_vitl.pth"
+if not ckpt.exists():
+    from huggingface_hub import hf_hub_download
+    hf_hub_download("depth-anything/Depth-Anything-V2-Metric-Hypersim-Large",
+                    "depth_anything_v2_metric_hypersim_vitl.pth", local_dir=str(ckpt.parent))
 sys.path.insert(0, str(DA_DIR))
 from depth_anything_v2.dpt import DepthAnythingV2  # noqa: E402  ADAPTER
 
