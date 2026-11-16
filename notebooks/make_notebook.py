@@ -67,7 +67,8 @@ def main():
     py = (HERE / "gpu_stages.py").read_text(encoding="utf-8")
     head = "\n".join(line.lstrip("# ").rstrip() for line in py.split("# %%")[0].strip().splitlines())
     items = [("markdown", "# GPU stages for m4_pullout\n\nUse a GPU runtime (Colab T4, or Kaggle with internet on), then run the cells in order.\n\n" + head),
-             ("code", "# bootstrap\n" + BOOTSTRAP)] + cells(py)[1 if py.lstrip().startswith("#") and not py.lstrip().startswith("# %%") else 0:]
+             ("code", "# clone and pull\n" + BOOTSTRAP),
+             ("code", "# load frames\n" + LOAD)] + cells(py)[1 if py.lstrip().startswith("#") and not py.lstrip().startswith("# %%") else 0:]
     nb = {
         "cells": [cell(k, t) for k, t in items],
         "metadata": {"accelerator": "GPU", "colab": {"provenance": []},
