@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import cv2
+import importlib
 import numpy as np
 from scipy.spatial.transform import Rotation
 
@@ -170,6 +171,7 @@ if not ckpt.exists():
     hf_hub_download("depth-anything/Depth-Anything-V2-Metric-Hypersim-Large",
                     "depth_anything_v2_metric_hypersim_vitl.pth", local_dir=str(ckpt.parent))
 sys.path.insert(0, str(DA_DIR))
+importlib.invalidate_caches()  # DA_DIR was a missing path on the first try; Python cached that
 from depth_anything_v2.dpt import DepthAnythingV2  # noqa: E402  ADAPTER
 
 model = DepthAnythingV2(encoder="vitl", features=256, out_channels=[256, 512, 1024, 1024], max_depth=20)
