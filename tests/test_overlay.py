@@ -1,6 +1,9 @@
+import cv2
 import numpy as np
+import pytest
 
-from mocap.overlay import draw_frame, project
+from mocap.camera import Camera, intrinsics_from_fov
+from mocap.overlay import draw_frame, project, write_video
 
 K = np.array([[960.0, 0, 960], [0, 960.0, 540], [0, 0, 1]])
 
@@ -37,3 +40,48 @@ def test_draw_frame_skips_invalid_frames():
     img = np.zeros((1080, 1920, 3), np.uint8)
     out = draw_frame(img, K, _aligned(valid=False), 0)
     assert out.sum() == 0
+
+
+W, H = 192, 108
+
+
+def _camera():
+    return Camera(W, H, 60.0, intrinsics_from_fov(W, H, 90))
+
+
+def _write_frames(rgb_dir, sizes):
+    rgb_dir.mkdir()
+    for k, (w, h) in enumerate(sizes):
+        cv2.imwrite(str(rgb_dir / f"{k:04d}.png"), np.zeros((h, w, 3), np.uint8))
+
+
+def test_write_video_writes_every_frame(tmp_path):
+    rgb_dir = tmp_path / "rgb"
+    _write_frames(rgb_dir, [(W, H)] * 3)
+    out_path = tmp_path / "overlay.mp4"
+    assert write_video(rgb_dir, _camera(), _aligned(n=3), out_path) == 3
+    cap = cv2.VideoCapture(str(out_path))
+    try:
+        frames = 0
+        while cap.read()[0]:
+            frames += 1
+    finally:
+        cap.release()
+    assert frames == 3
+
+
+def test_write_video_rejects_frame_of_wrong_size(tmp_path):
+    rgb_dir = tmp_path / "rgb"
+    _write_frames(rgb_dir, [(W, H), (100, 50), (W, H)])
+    with pytest.raises(SystemExit) as excinfo:
+        write_video(rgb_dir, _camera(), _aligned(n=3), tmp_path / "overlay.mp4")
+    msg = str(excinfo.value)
+    assert "0001.png" in msg
+    assert "size" in msg
+
+
+def test_draw_frame_keypoint_at_zero_depth_does_not_raise():
+    img = np.zeros((H, W, 3), np.uint8)
+    aligned = _aligned()
+    aligned["left_keypoints"][0, 0] = [0.0, 0.0, 0.0]
+    draw_frame(img, _camera().K, aligned, 0)
