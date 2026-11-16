@@ -41,7 +41,7 @@ def pip(*args, check=True, **kw):
 
 
 pip("--no-deps", "git+https://github.com/warmshao/WiLoR-mini")
-pip("smplx==0.1.28", "timm", "einops", "ultralytics==8.1.34", "huggingface_hub", "scikit-image", "roma", "trimesh")
+pip("smplx==0.1.28", "transformers", "timm", "einops", "ultralytics==8.1.34", "huggingface_hub", "scikit-image", "roma", "trimesh")
 pip("setuptools", "wheel")
 pip("--no-build-isolation", "git+https://github.com/mattloper/chumpy")
 pip("git+https://github.com/facebookresearch/sam2.git", env={**os.environ, "SAM2_BUILD_ALLOW_ERRORS": "1"})
@@ -88,10 +88,50 @@ def empty_hand():
     }
 
 
+# WiLoR's own YOLO detector misses rendered gloved hands, so boxes come from OWLv2 (zero-shot, text query)
+# and go to WiLoR through predict_with_bboxes. Side is a heuristic: one box = left (the support hand,
+# the right hand is behind the gun), two boxes = leftmost is left.
+from transformers import Owlv2ForObjectDetection, Owlv2Processor  # noqa: E402
+from torchvision.ops import nms  # noqa: E402
+
+owl_proc = Owlv2Processor.from_pretrained("google/owlv2-base-patch16-ensemble")
+owl = Owlv2ForObjectDetection.from_pretrained("google/owlv2-base-patch16-ensemble").to("cuda").eval()
+HAND_QUERY = "a hand wearing a black glove"
+HAND_SCORE = 0.1  # lower if hands are missed, raise if the debug boxes land on sleeves or the gun
+
+
+def find_hands(rgb):
+    """Returns (boxes (n,4) xyxy float, scores (n,)), at most 2, sorted left to right."""
+    h, w = rgb.shape[:2]
+    inputs = owl_proc(text=[[HAND_QUERY]], images=rgb, return_tensors="pt").to("cuda")
+    with torch.no_grad():
+        out = owl(**inputs)
+    side = max(h, w)  # OWLv2 pads the image to a square
+    res = owl_proc.post_process_object_detection(out, threshold=HAND_SCORE, target_sizes=torch.tensor([[side, side]]))[0]
+    boxes, scores = res["boxes"].cpu(), res["scores"].cpu()
+    keep = nms(boxes, scores, 0.3)[:2]
+    boxes, scores = boxes[keep].numpy(), scores[keep].numpy()
+    boxes[:, [0, 2]] = boxes[:, [0, 2]].clip(0, w)
+    boxes[:, [1, 3]] = boxes[:, [1, 3]].clip(0, h)
+    order = np.argsort(boxes[:, 0]) if len(boxes) else []
+    return boxes[order].astype(np.float64), scores[order]
+
+
+(CLIP / "hand_check").mkdir(exist_ok=True)
 hands = {"left": empty_hand(), "right": empty_hand()}
 for i, path in enumerate(frames):
-    rgb = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
-    for out in pipe.predict(rgb):  # ADAPTER: returns a list of dicts, one per detected hand
+    bgr = cv2.imread(str(path))
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    boxes, box_scores = find_hands(rgb)
+    if i % 10 == 0:  # look at these to check the boxes are on hands
+        dbg = bgr.copy()
+        for b in boxes:
+            cv2.rectangle(dbg, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), (0, 255, 0), 4)
+        cv2.imwrite(str(CLIP / "hand_check" / f"{i + 1:05d}.jpg"), cv2.resize(dbg, None, fx=0.5, fy=0.5))
+    if len(boxes) == 0:
+        continue
+    is_rights = [0] if len(boxes) == 1 else [0, 1]
+    for out, score in zip(pipe.predict_with_bboxes(rgb, boxes, is_rights), box_scores):
         p = out["wilor_preds"]  # ADAPTER
         if not printed_keys:
             printed_keys = True
@@ -115,10 +155,11 @@ for i, path in enumerate(frames):
         h["finger_rot"][i] = fingers
         h["keypoints"][i] = kp + cam_t
         h["valid"][i] = True
-        h["score"][i] = 1.0  # ADAPTER: no detection confidence assumed
+        h["score"][i] = float(score)
 # Frames where a side was not detected keep their identity poses and valid=False (empty_hand defaults).
 save_hands(CLIP / "hands.npz", hands)
 print({s: int(hands[s]["valid"].sum()) for s in hands}, "valid frames of", N)
+print("check boxes in", CLIP / "hand_check")
 
 # %% depth: Depth Anything V2 metric (run from the cloned metric_depth folder; ADAPTER)
 sys.path.insert(0, str(DA_DIR))
