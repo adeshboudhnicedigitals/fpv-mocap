@@ -200,10 +200,49 @@ overlay[masks[0] > 0] = (0.5 * overlay[masks[0] > 0] + [127, 0, 0]).astype(np.ui
 cv2.imwrite(str(CLIP / "masks" / "gun_mask_check.png"), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
 # Look at gun_mask_check.png: the mask must cover the rifle only. If not, change gun_click in meta.json.
 
+# %% FoundationPose install: clone, GPU extensions, native build, weights (ADAPTER: first run on Kaggle)
+# The repo targets modern torch (its requirements.txt asks for numpy>=2 and a CUDA 12 torch), so the
+# runtime's torch is kept. pytorch3d compiles from source: about 10-20 minutes the first time per session.
+def sh(cmd, **kw):
+    print("$", cmd)
+    subprocess.run(cmd, shell=True, check=True, **kw)
+
+
+if not FP_DIR.exists():
+    sh(f"git clone https://github.com/NVlabs/FoundationPose {FP_DIR}")
+CUDA_HOME = os.environ.get("CUDA_HOME") or next((c for c in ("/usr/local/cuda", "/usr/local/cuda-12.4") if Path(c, "bin", "nvcc").exists()), "")
+assert CUDA_HOME, "nvcc not found: FoundationPose needs the CUDA toolkit (pytorch3d and nvdiffrast compile against it)"
+os.environ.update(CUDA_HOME=CUDA_HOME, PATH=f"{CUDA_HOME}/bin:{os.environ['PATH']}", FORCE_CUDA="1",
+                  TORCH_CUDA_ARCH_LIST="7.5", PYOPENGL_PLATFORM="egl")  # 7.5 = T4; one arch compiles fastest
+try:
+    import pytorch3d  # noqa: F401
+except ImportError:
+    pip("--no-build-isolation", "git+https://github.com/facebookresearch/pytorch3d.git")
+try:
+    import nvdiffrast  # noqa: F401
+except ImportError:
+    pip("--no-build-isolation", "git+https://github.com/NVlabs/nvdiffrast.git")
+pip("-r", str(FP_DIR / "requirements.txt"), "pybind11", "gdown")
+if not list((FP_DIR / "mycpp" / "build").glob("mycpp*.so")):
+    sh("apt-get install -y -q libboost-all-dev libeigen3-dev cmake libgl1 libegl1 > /dev/null")
+    sh(f"cd {FP_DIR}/mycpp && rm -rf build && mkdir build && cd build && "
+       f"cmake .. -DCMAKE_BUILD_TYPE=Release -Dpybind11_DIR=$({sys.executable} -m pybind11 --cmakedir) "
+       f"-DPYTHON_EXECUTABLE={sys.executable} && make -j$(nproc)")
+for w in ("2023-10-28-18-33-37", "2024-01-11-20-02-45"):  # refiner, scorer
+    if not (FP_DIR / "weights" / w).exists():
+        import gdown
+        gdown.download_folder("https://drive.google.com/drive/folders/1DFezOAD0oD1BblsXVxqDsl8fj0qzB82i",
+                              output=str(FP_DIR / "weights"), quiet=True)
+        break
+assert (FP_DIR / "weights" / "2023-10-28-18-33-37").exists() and (FP_DIR / "weights" / "2024-01-11-20-02-45").exists(), \
+    "weights missing: download both folders from the FoundationPose Google Drive into FoundationPose/weights/"
+
 # %% gun: FoundationPose, register at init, track forward then backward (ADAPTER)
 import trimesh  # noqa: E402
 
 sys.path.insert(0, str(FP_DIR))
+sys.path.insert(0, str(FP_DIR / "mycpp" / "build"))
+importlib.invalidate_caches()
 from estimater import FoundationPose, ScorePredictor, PoseRefinePredictor, dr  # noqa: E402  ADAPTER
 
 mesh = trimesh.load(ROOT / "rigs" / "m4_gun.obj", force="mesh")
