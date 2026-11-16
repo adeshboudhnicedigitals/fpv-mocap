@@ -36,8 +36,9 @@ uv run mocap overlay <clip>                           # clips/<clip>/overlay.mp4
    even light; avoid strong backlight.
 6. Write `clips/<clip>/SOURCE.md`: who filmed it, when, which replica and where each marker sits.
 
-## GPU stages on Colab
+## GPU stages on Colab or Kaggle
 
-Open `notebooks/gpu_stages.ipynb` in Colab (T4 runtime). The repo is private: add a `GITHUB_TOKEN` secret
-(read access to this repo). The footage and `rigs/m4_gun.obj` are not in git; the first cell asks for them.
-`notebooks/gpu_stages.py` is the source; regenerate the notebook with `python notebooks/make_notebook.py`.
+Open `notebooks/gpu_stages.ipynb` on a GPU runtime (Kaggle: turn Internet on). The repo is private: add a
+`GITHUB_TOKEN` secret (read access to this repo) under Colab's Secrets or Kaggle's Add-ons > Secrets. The
+footage and `rigs/m4_gun.obj` are in the repo, so nothing is uploaded. `notebooks/gpu_stages.py` is the
+source; regenerate the notebook with `python notebooks/make_notebook.py`.

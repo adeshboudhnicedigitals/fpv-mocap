@@ -8,39 +8,33 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
-BOOTSTRAP = '''\
-# Run first. Clones the repo, then asks for the two files that are not in git (footage and tracking mesh).
+BOOTSTRAP = '''# Run first. Clones the repo (footage and tracking mesh are in it), then extracts the frames.
 import os, subprocess, sys
 from pathlib import Path
 
 REPO = "https://github.com/adeshboudhnicedigitals/fpv-mocap.git"  # private repo: needs a token
-BASE = Path("/content")
+BASE = Path("/content") if Path("/content").exists() else Path("/kaggle/working")  # Colab or Kaggle
 ROOT = BASE / "fpv-mocap"
 if not ROOT.exists():
+    token = os.environ.get("GITHUB_TOKEN", "")
     try:
-        from google.colab import userdata
-        token = userdata.get("GITHUB_TOKEN")  # Colab: key icon > Secrets > add GITHUB_TOKEN (repo read access)
-    except Exception:
-        token = os.environ.get("GITHUB_TOKEN", "")
+        from google.colab import userdata  # Colab: key icon > Secrets > GITHUB_TOKEN
+        token = userdata.get("GITHUB_TOKEN")
+    except ImportError:
+        try:
+            from kaggle_secrets import UserSecretsClient  # Kaggle: Add-ons > Secrets > GITHUB_TOKEN
+            token = UserSecretsClient().get_secret("GITHUB_TOKEN")
+        except ImportError:
+            pass
     url = REPO.replace("https://", f"https://{token}@") if token else REPO
-    subprocess.run(["git", "clone", "-b", "feat/m4-pullout", url, str(ROOT)], check=True, cwd=BASE)
+    subprocess.run(["git", "clone", "-b", "main", url, str(ROOT)], check=True, cwd=BASE)
 subprocess.run(["git", "pull", "--ff-only"], check=True, cwd=ROOT)
 
 CLIP = ROOT / "clips" / "m4_pullout"
-VIDEO = ROOT / "m4_pullout_single_shot.mp4"
-MESH = ROOT / "rigs" / "m4_gun.obj"
-if not VIDEO.exists() or not MESH.exists():
-    from google.colab import files
-    print("Upload m4_pullout_single_shot.mp4 and rigs/m4_gun.obj (from your laptop)")
-    for name, data in files.upload().items():
-        dest = VIDEO if name.endswith(".mp4") else MESH
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(data)
-
 sys.path.insert(0, str(ROOT))
 from mocap.frames import extract
 if not any((CLIP / "rgb").glob("*.png")):
-    print(extract(VIDEO, CLIP / "rgb", 60.0), "frames")
+    print(extract(ROOT / "m4_pullout_single_shot.mp4", CLIP / "rgb", 60.0), "frames")
 '''
 
 
@@ -63,7 +57,7 @@ def cell(kind, text):
 def main():
     py = (HERE / "gpu_stages.py").read_text(encoding="utf-8")
     head = "\n".join(line.lstrip("# ").rstrip() for line in py.split("# %%")[0].strip().splitlines())
-    items = [("markdown", "# GPU stages for m4_pullout\n\nSet the runtime to a T4 GPU, then run the cells in order.\n\n" + head),
+    items = [("markdown", "# GPU stages for m4_pullout\n\nUse a GPU runtime (Colab T4, or Kaggle with internet on), then run the cells in order.\n\n" + head),
              ("code", "# bootstrap\n" + BOOTSTRAP)] + cells(py)[1 if py.lstrip().startswith("#") and not py.lstrip().startswith("# %%") else 0:]
     nb = {
         "cells": [cell(k, t) for k, t in items],
