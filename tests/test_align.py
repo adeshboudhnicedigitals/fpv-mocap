@@ -1,6 +1,9 @@
 import numpy as np
+import pytest
+from scipy.spatial.transform import Rotation
 
 from mocap.align import blend_pose, grip_offset, grip_weight, run, smooth_fingers
+from mocap.contracts import ContractError
 from mocap.transforms import relative
 
 
@@ -54,8 +57,6 @@ def test_blend_pose_endpoints_and_midpoint():
 def test_smooth_fingers_reduces_jitter_and_keeps_valid_rotations():
     rng = np.random.default_rng(0)
     n = 40
-    from scipy.spatial.transform import Rotation
-
     base = Rotation.from_rotvec([0.3, 0.0, 0.0])
     noisy = np.empty((n, 15, 3, 3))
     for i in range(n):
@@ -99,7 +100,10 @@ def test_run_locks_the_gripping_hand_and_releases_the_support_hand():
     gun, hands, gun_truth, off_r = _synthetic()
     out = run(gun, hands)
     assert out["right_grip_weight"][30] > 0.99
-    assert np.allclose(out["right_T_cam_wrist"][30, :3, 3], (gun_truth[30] @ off_r)[:3, 3], atol=1e-3)
+    locked = out["right_grip_weight"] > 0.99
+    rel_t = relative(out["T_cam_gun"], out["right_T_cam_wrist"])[locked][:, :3, 3]
+    assert rel_t.std(axis=0).max() < 1e-9
+    assert np.allclose(rel_t.mean(axis=0), off_r[:3, 3], atol=1e-3)
     assert out["left_grip_weight"][10] > 0.99
     assert out["left_grip_weight"][55] < 0.01
     assert np.allclose(out["left_T_cam_wrist"][55], hands["left"]["T_cam_wrist"][55])
@@ -124,3 +128,10 @@ def test_run_leaves_frames_with_no_gun_and_no_hand_invalid():
     out = run(gun, hands)
     assert np.all(out["gun_source"][:5] == -1)
     assert not out["gun_valid"][:5].any()
+
+
+def test_run_rejects_mismatched_frame_counts():
+    gun, hands, _, _ = _synthetic()
+    gun = {k: v[:50] for k, v in gun.items()}
+    with pytest.raises(ContractError, match="gun has 50"):
+        run(gun, hands)

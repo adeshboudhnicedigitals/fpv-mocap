@@ -8,7 +8,7 @@ from scipy.ndimage import uniform_filter1d
 from scipy.signal import savgol_filter
 from scipy.spatial.transform import Rotation, Slerp
 
-from mocap.contracts import SIDES
+from mocap.contracts import SIDES, ContractError
 from mocap.transforms import relative
 
 
@@ -80,6 +80,9 @@ def smooth_fingers(finger_rot: np.ndarray, valid: np.ndarray, window: int = 9, o
 
 def run(gun: dict[str, np.ndarray], hands: dict[str, dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
     """Produce the contents of aligned.npz from gun and hands data (see Interfaces in the plan)."""
+    counts = (len(gun["T_cam_gun"]), len(hands["left"]["T_cam_wrist"]), len(hands["right"]["T_cam_wrist"]))
+    if len(set(counts)) != 1:
+        raise ContractError(f"gun has {counts[0]} frames, left hand {counts[1]}, right hand {counts[2]}")
     T_gun = gun["T_cam_gun"].copy()
     gun_valid = gun["valid"].copy()
     source = np.where(gun_valid, 0, -1).astype(np.int8)
