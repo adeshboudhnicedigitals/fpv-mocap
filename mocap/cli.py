@@ -5,9 +5,11 @@ import math
 from pathlib import Path
 
 import cv2
+import numpy as np
 
-from mocap import frames, sheets
+from mocap import align, frames, overlay, sheets
 from mocap.camera import Camera, calibrate, intrinsics_from_fov
+from mocap.contracts import ContractError, load_gun, load_hands
 
 CLIPS = Path("clips")
 
@@ -50,6 +52,28 @@ def cmd_sheets(args: argparse.Namespace) -> None:
         print(path)
 
 
+def cmd_align(args: argparse.Namespace) -> None:
+    clip = _clip_dir(args.clip)
+    try:
+        aligned = align.run(load_gun(clip / "gun.npz"), load_hands(clip / "hands.npz"))
+    except ContractError as e:
+        raise SystemExit(str(e))
+    np.savez(clip / "aligned.npz", **aligned)
+    gripping = {s: int((aligned[f"{s}_grip_weight"] > 0.5).sum()) for s in ("left", "right")}
+    print(f"gun valid on {int(aligned['gun_valid'].sum())} of {len(aligned['gun_valid'])} frames; "
+          f"gripping frames {gripping} -> {clip / 'aligned.npz'}")
+
+
+def cmd_overlay(args: argparse.Namespace) -> None:
+    clip = _clip_dir(args.clip)
+    for needed in ("camera.json", "aligned.npz"):
+        if not (clip / needed).exists():
+            raise SystemExit(f"{clip / needed} not found")
+    count = overlay.write_video(clip / "rgb", Camera.load(clip / "camera.json"),
+                                dict(np.load(clip / "aligned.npz")), clip / "overlay.mp4")
+    print(f"{count} frames -> {clip / 'overlay.mp4'}")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="mocap")
     sub = parser.add_subparsers(required=True)
@@ -73,6 +97,14 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("sheets", help="write printable ArUco and checkerboard sheets")
     p.add_argument("--out", default="sheets")
     p.set_defaults(func=cmd_sheets)
+
+    p = sub.add_parser("align", help="join gun.npz and hands.npz into aligned.npz")
+    p.add_argument("clip")
+    p.set_defaults(func=cmd_align)
+
+    p = sub.add_parser("overlay", help="draw aligned.npz onto the frames as overlay.mp4")
+    p.add_argument("clip")
+    p.set_defaults(func=cmd_overlay)
 
     args = parser.parse_args(argv)
     args.func(args)

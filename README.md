@@ -17,6 +17,8 @@ uv run mocap sheets                                   # sheets/aruco_markers.png
 uv run mocap frames <clip> <video> --fps 60           # clips/<clip>/rgb/00001.png ...
 uv run mocap camera <clip> --checkerboard <folder>    # clips/<clip>/camera.json, calibrated
 uv run mocap camera <clip> --fov 90                   # or a guessed horizontal FOV
+uv run mocap align <clip>                             # clips/<clip>/aligned.npz from gun.npz + hands.npz
+uv run mocap overlay <clip>                           # clips/<clip>/overlay.mp4
 ```
 
 ## Recording a clip
