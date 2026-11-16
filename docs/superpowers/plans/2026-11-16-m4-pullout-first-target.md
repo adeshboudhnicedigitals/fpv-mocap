@@ -1229,13 +1229,16 @@ from mocap.transforms import cam_to_world  # noqa: E402
 
 # --- names from `blender/list_bones.py` (Task 7). Edit to match the rig. ---
 GUN_BONE = "Main_j"
-CAMERA_BONE = "Camera"  # the rig's camera bone; if there is none, set CAMERA_WORLD below
+CAMERA_BONE = "FPS_Camera_j"  # the rig's camera bone (docs/rig-notes.md)
 FOREARM = {"right": "RightForeArm", "left": "LeftForeArm"}
 FINGER_BONES = {  # MANO joint order, 15 joints: index, middle, pinky, ring, thumb, three each
     side: [f"{Side}Hand{finger}{k}" for finger in ("Index", "Middle", "Pinky", "Ring", "Thumb") for k in (1, 2, 3)]
     for side, Side in (("right", "Right"), ("left", "Left"))
 }
-MESH_TO_RIG = np.eye(4)  # gun-mesh frame (FoundationPose) to the gun bone's frame; tune by eye
+# The gun OBJ is in the FBX world frame (docs/rig-notes.md), so FoundationPose poses map FBX-world points to camera.
+# A skinned bone at rest world matrix B_rest then needs B' = W @ B_rest, where W = cam_to_world(...) of the pose.
+# MESH_TO_RIG is therefore the gun bone's rest world matrix, set after the rig is imported (below).
+MESH_TO_RIG = np.eye(4)
 
 clip, rig_path = (Path(a) for a in sys.argv[sys.argv.index("--") + 1 :][:2])
 aligned = np.load(clip / "aligned.npz")
@@ -1249,6 +1252,8 @@ bpy.ops.object.mode_set(mode="POSE")
 scene = bpy.context.scene
 scene.render.fps = 60
 scene.frame_start, scene.frame_end = 1, N
+
+MESH_TO_RIG = np.array(arm.matrix_world @ arm.data.bones[GUN_BONE].matrix_local)  # rest world matrix of the gun bone
 
 # Camera world matrix (Blender camera convention) from the camera bone at rest.
 cam_world = np.array(arm.matrix_world @ arm.pose.bones[CAMERA_BONE].matrix)
@@ -1314,7 +1319,7 @@ Expected: ends with `EXPORTED ...m4_pullout.glb`. Common failures: a `KeyError` 
 
 - [ ] **Step 3: Judge by eye and tune**
 
-Open `clips/m4_pullout/retarget.blend` in Blender and play it. Check: (a) the rifle comes up from below as in the source clip; (b) the hands follow the rifle and the forearms bend sensibly; (c) fingers curl rather than twist. Fixes, in this order: if the rifle is rotated 90 or 180 degrees relative to the clip, set `MESH_TO_RIG` to the matching rotation matrix and rerun; if the hands drift off the rifle, check `overlay.mp4` (Task 8 Step 3) first, because the problem is probably upstream; if fingers twist, the MANO rest pose differs from the rig's: pick one finger bone, compare a flat-hand frame in Blender, and add a per-bone constant rotation applied before keying.
+Open `clips/m4_pullout/retarget.blend` in Blender and play it. Check: (a) the rifle comes up from below as in the source clip; (b) the hands follow the rifle and the forearms bend sensibly; (c) fingers curl rather than twist. Fixes, in this order: if the rifle is rotated 90 or 180 degrees relative to the clip, the camera bone's axes probably differ from the Blender camera convention (it should look along its local -Z with +Y up): compare `cam_world` with the camera bone and add the fixed correction to `cam_world`, not to `MESH_TO_RIG`; if the hands drift off the rifle, check `overlay.mp4` (Task 8 Step 3) first, because the problem is probably upstream; if fingers twist, the MANO rest pose differs from the rig's: pick one finger bone, compare a flat-hand frame in Blender, and add a per-bone constant rotation applied before keying.
 
 - [ ] **Step 4: Check the `.glb` in Godot**
 
