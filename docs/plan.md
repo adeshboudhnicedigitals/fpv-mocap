@@ -124,3 +124,7 @@ assets, but anything made with these tools must be revisited before a commercial
   hand pose once.
 - The rig's proportions differ from the performer's: IK keeps the wrists on target; shoulders sit at
   the rig's own positions.
+- A single global grip offset per hand fails if the support hand regrips during the draw (mitigation when it
+  shows up: one offset per connected run of grip weight >= 0.99).
+- Gun fill-in from the right hand does not check that the hand is gripping (mitigation: only fill within or
+  next to grip runs).

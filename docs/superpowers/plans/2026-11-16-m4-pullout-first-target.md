@@ -1020,6 +1020,8 @@ Expected: lines for objects and bones including `Main_j`, `RightHand`, `LeftHand
 Run: `& $env:BLENDER -b -P blender/export_gun_mesh.py -- rigs\M4.fbx <gun mesh object name> rigs\m4_gun.obj`
 Expected output ends with `DIMS_M (...)` where the longest value is between 0.7 and 0.95. If it is about 80-90, the FBX is in centimetres: rerun with `global_scale=0.01` in the script. Record the object name, the bone names, and the scale used as a comment block at the top of `blender/retarget.py` in Task 9.
 
+Note: the FBX probably carries its own animation (a binary grep finds `AnimationStack`), and `export_gun_mesh.py` exports the mesh at the import's current pose, not necessarily the rest pose. Task 9 Step 2 therefore first verifies that the imported rig's gun bone pose matrix equals its rest matrix at the frame used (or sets `arm.data.pose_position = 'REST'` in both scripts). `blender/export_gun_mesh.py` itself is not changed by this note; if the check fails, re-export the mesh with the rest pose.
+
 - [ ] **Step 5: Commit**
 
 ```bash
@@ -1177,6 +1179,15 @@ save_gun(CLIP / "gun.npz", {"T_cam_gun": T_gun, "valid": gun_valid, "score": gun
 2. Download `hands.npz` and validate it on the laptop: `uv run python -c "from mocap.contracts import load_hands; load_hands('clips/m4_pullout/hands.npz')"` must print nothing and exit 0. (`mocap align` needs `gun.npz` too, so the hands overlay waits for step 3.)
 3. Run the `depth`, `gun mask` and `gun` cells. Look at `masks/gun_mask_check.png` before the `gun` cell. Download `gun.npz`.
 
+Adapter notes (check on the first run, fix in the adapter lines only):
+
+- `global_orient` and `hand_pose` may be axis-angle (shapes `(3,)` and `(45,)`) rather than rotation matrices. If so convert with `scipy.spatial.transform.Rotation.from_rotvec(v.reshape(-1, 3)).as_matrix()` before writing `T_cam_wrist` and `finger_rot`.
+- Confirm how left-hand outputs are mirrored (WiLoR flips left-hand crops, so left outputs may be in the mirrored frame and need un-mirroring before use).
+- Consider keypoint 0 (the wrist joint, `pred_keypoints_3d[0] + pred_cam_t_full`) instead of `pred_cam_t_full` as the wrist translation, since it is the point the IK target should sit on (grip locking does not care which fixed point is used).
+- Frames invalidated before the gun or hand enters the view must keep identity poses (`align.run` now tolerates zeros on invalid frames, but keep identity anyway).
+- If the first `mocap align` prints `gripping 0 frames` for a side, loosen `--eps-t` / `--eps-r-deg` before anything else, and read the printed median wrist-to-gun distance (expect 0.05-0.3 m).
+- Depth comes from three independent scales: the guessed FOV 90, Depth Anything Hypersim indoor metric depth, and the WiLoR focal prior. If the wrist-to-gun distance is off, suspect these first.
+
 - [ ] **Step 3: Check on the laptop**
 
 Run:
@@ -1184,7 +1195,7 @@ Run:
 uv run mocap align m4_pullout
 uv run mocap overlay m4_pullout
 ```
-Expected: `gun valid on X of 137 frames; gripping frames {...}` and `137 frames -> clips\m4_pullout\overlay.mp4`. Open `overlay.mp4`: gun axes should sit on the rifle through the clip and the hand dots should sit on the hands. Fix by editing `gun_valid[:first_visible]`/`meta.json` and rerunning the affected cell; if the axes are consistently the wrong size, adjust `--fov` and rerun `camera`, then the GPU cells.
+Expected: `gun valid on X of 137 frames -> ...`, then per side a line like `right: gripping 41 frames, median wrist-to-gun distance 0.17 m`, and `137 frames -> clips\m4_pullout\overlay.mp4`. If a side prints `gripping 0 frames`, see the first-align bullet in the adapter notes under Step 2. Open `overlay.mp4`: gun axes should sit on the rifle through the clip and the hand dots should sit on the hands. Fix by editing `gun_valid[:first_visible]`/`meta.json` and rerunning the affected cell; if the axes are consistently the wrong size, adjust `--fov` and rerun `camera`, then the GPU cells.
 
 - [ ] **Step 4: Commit**
 
@@ -1229,16 +1240,19 @@ from mocap.transforms import cam_to_world  # noqa: E402
 
 # --- names from `blender/list_bones.py` (Task 7). Edit to match the rig. ---
 GUN_BONE = "Main_j"
-CAMERA_BONE = "FPS_Camera_j"  # the rig's camera bone (docs/rig-notes.md)
+CAMERA_OBJECT = "FPS_Camera"  # a CAMERA object per docs/rig-notes.md; preferred source of cam_world
+CAMERA_BONE = "FPS_Camera_j"  # documented fallback if FPS_Camera is not a camera object
 FOREARM = {"right": "RightForeArm", "left": "LeftForeArm"}
-FINGER_BONES = {  # MANO joint order, 15 joints: index, middle, pinky, ring, thumb, three each
+HAND_BONES = {"right": "RightHand", "left": "LeftHand"}
+FINGER_BONES = {  # MANO joint order, 15 joints: index, middle, pinky, ring, thumb (bones 1..3; 4 is the tip)
     side: [f"{Side}Hand{finger}{k}" for finger in ("Index", "Middle", "Pinky", "Ring", "Thumb") for k in (1, 2, 3)]
     for side, Side in (("right", "Right"), ("left", "Left"))
 }
 # The gun OBJ is in the FBX world frame (docs/rig-notes.md), so FoundationPose poses map FBX-world points to camera.
 # A skinned bone at rest world matrix B_rest then needs B' = W @ B_rest, where W = cam_to_world(...) of the pose.
-# MESH_TO_RIG is therefore the gun bone's rest world matrix, set after the rig is imported (below).
-MESH_TO_RIG = np.eye(4)
+# GUN_REST is the gun bone's rest world matrix B_rest, set after the rig is imported (below). It applies to the
+# GUN BONE ONLY: wrists are placed at the tracked pose itself, with no rest matrix.
+GUN_REST = np.eye(4)
 
 clip, rig_path = (Path(a) for a in sys.argv[sys.argv.index("--") + 1 :][:2])
 aligned = np.load(clip / "aligned.npz")
@@ -1248,19 +1262,36 @@ bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.fbx(filepath=str(rig_path))
 arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
 bpy.context.view_layer.objects.active = arm
+arm.animation_data_clear()  # the FBX may carry its own animation (AnimationStack): drop it before keying
+for pb in arm.pose.bones:
+    pb.matrix_basis = Matrix()  # rest pose
+bpy.context.view_layer.update()
 bpy.ops.object.mode_set(mode="POSE")
 scene = bpy.context.scene
 scene.render.fps = 60
 scene.frame_start, scene.frame_end = 1, N
+arm.animation_data_create()
+arm.animation_data.action = bpy.data.actions.new(clip.name)  # fresh action named after the clip
 
-MESH_TO_RIG = np.array(arm.matrix_world @ arm.data.bones[GUN_BONE].matrix_local)  # rest world matrix of the gun bone
+# Rest data, not the posed bones: bone.matrix_local is the rest matrix in armature space.
+GUN_REST = np.array(arm.matrix_world @ arm.data.bones[GUN_BONE].matrix_local)  # B_rest of the gun bone
 
-# Camera world matrix (Blender camera convention) from the camera bone at rest.
-cam_world = np.array(arm.matrix_world @ arm.pose.bones[CAMERA_BONE].matrix)
+# Camera world matrix (Blender camera convention): the FPS_Camera object if it is a camera, else the rest bone.
+cam_obj = bpy.data.objects.get(CAMERA_OBJECT)
+if cam_obj is not None and cam_obj.type == "CAMERA":
+    cam_world = np.array(cam_obj.matrix_world)
+else:
+    cam_world = np.array(arm.matrix_world @ arm.data.bones[CAMERA_BONE].matrix_local)
+
+
+def gun_to_world(T_cam: np.ndarray) -> Matrix:
+    """World matrix for the gun bone: the tracked pose composed with the bone's rest matrix."""
+    return Matrix(cam_to_world(cam_world, T_cam @ GUN_REST).tolist())
 
 
 def to_world(T_cam: np.ndarray) -> Matrix:
-    return Matrix(cam_to_world(cam_world, T_cam @ MESH_TO_RIG).tolist())
+    """World matrix at the tracked pose itself (wrists / IK targets): no rest matrix."""
+    return Matrix(cam_to_world(cam_world, T_cam).tolist())
 
 
 def set_bone_world(bone, T_world: Matrix):
@@ -1271,11 +1302,15 @@ def set_bone_world(bone, T_world: Matrix):
 targets = {}
 for side, bone_name in FOREARM.items():
     empty = bpy.data.objects.new(f"ik_target_{side}", None)
+    empty.rotation_mode = "XYZ"  # matches the rotation_euler channel keyed below
     scene.collection.objects.link(empty)
     targets[side] = empty
     ik = arm.pose.bones[bone_name].constraints.new("IK")
     ik.target = empty
     ik.chain_count = 2
+    # IK only places the wrist; the hand bone copies the empty's rotation (bake clears constraints).
+    copy_rot = arm.pose.bones[HAND_BONES[side]].constraints.new("COPY_ROTATION")
+    copy_rot.target = empty
 
 for pb in arm.pose.bones:
     pb.rotation_mode = "QUATERNION"
@@ -1283,7 +1318,7 @@ for pb in arm.pose.bones:
 for i in range(N):
     scene.frame_set(i + 1)
     if aligned["gun_valid"][i]:
-        set_bone_world(arm.pose.bones[GUN_BONE], to_world(aligned["T_cam_gun"][i]))
+        set_bone_world(arm.pose.bones[GUN_BONE], gun_to_world(aligned["T_cam_gun"][i]))
         bpy.context.view_layer.update()
         arm.pose.bones[GUN_BONE].keyframe_insert("location")
         arm.pose.bones[GUN_BONE].keyframe_insert("rotation_quaternion")
@@ -1292,14 +1327,13 @@ for i in range(N):
             continue
         empty.matrix_world = to_world(aligned[f"{side}_T_cam_wrist"][i])
         empty.keyframe_insert("location")
-        empty.keyframe_insert("rotation_euler")
+        empty.keyframe_insert("rotation_euler")  # rotation must be keyed too: Copy Rotation reads it
         for name, R in zip(FINGER_BONES[side], aligned[f"{side}_finger_rot"][i]):
             pb = arm.pose.bones[name]
             pb.rotation_quaternion = Matrix(R.tolist()).to_quaternion()
             pb.keyframe_insert("rotation_quaternion")
     bpy.context.view_layer.update()  # constraints must see the new target values
 
-arm.animation_data.action.name = clip.name
 bpy.ops.nla.bake(frame_start=1, frame_end=N, only_selected=False, visual_keying=True,
                  clear_constraints=True, use_current_action=True, bake_types={"POSE"})
 bpy.ops.wm.save_as_mainfile(filepath=str(clip / "retarget.blend"))
@@ -1310,22 +1344,43 @@ bpy.ops.export_scene.gltf(filepath=str(clip / f"{clip.name}.glb"), use_selection
                           export_animations=True, export_current_frame=False)
 print("EXPORTED", clip / f"{clip.name}.glb")
 ```
-Note on the two ordered steps inside each frame: wrists and fingers are keyed after the gun is placed and updated, so the IK solve sees a settled gun; the IK targets are empties, which avoids needing IK bones in the rig. Bake with `clear_constraints=True` replaces the live IK with plain keyed bone rotations so the `.glb` needs no constraints.
+Note on the two ordered steps inside each frame: wrists and fingers are keyed after the gun is placed and updated, so the IK solve sees a settled gun; the IK targets are empties, which avoids needing IK bones in the rig. Bake with `clear_constraints=True` replaces the live IK and Copy Rotation constraints with plain keyed bone rotations so the `.glb` needs no constraints. `B_rest` (`GUN_REST`) is applied only through `gun_to_world`, to the gun bone; wrists use `to_world`, because the IK target empty is a plain object that should sit exactly at the tracked wrist pose.
 
 - [ ] **Step 2: Run it**
 
 Run (PowerShell): `& $env:BLENDER -b -P blender/retarget.py -- clips\m4_pullout rigs\M4.fbx`
+Before trusting the result, verify the rest-pose assumption behind `GUN_REST` and the exported mesh: with the rig imported (as in the script, after `animation_data_clear()` and resetting the pose), print `arm.pose.bones[GUN_BONE].matrix` and `arm.matrix_world @ arm.data.bones[GUN_BONE].matrix_local` and confirm they are equal (`np.allclose`) at the frame used. If they differ, `rigs/m4_gun.obj` was exported at a posed state: set `arm.data.pose_position = 'REST'` in both `blender/export_gun_mesh.py` and `blender/retarget.py`, and re-export the mesh. (This check is recorded in `docs/rig-notes.md`; `export_gun_mesh.py` is not edited by this plan revision.)
+
 Expected: ends with `EXPORTED ...m4_pullout.glb`. Common failures: a `KeyError` naming a bone means the constant at the top of the script does not match the rig (check the list from Task 7); `AttributeError: 'NoneType' object has no attribute 'action'` means nothing was keyed (check `aligned.npz` has valid frames).
 
-- [ ] **Step 3: Judge by eye and tune**
+- [ ] **Step 3 (optional, recommended): Sanity-check the camera convention**
 
-Open `clips/m4_pullout/retarget.blend` in Blender and play it. Check: (a) the rifle comes up from below as in the source clip; (b) the hands follow the rifle and the forearms bend sensibly; (c) fingers curl rather than twist. Fixes, in this order: if the rifle is rotated 90 or 180 degrees relative to the clip, the camera bone's axes probably differ from the Blender camera convention (it should look along its local -Z with +Y up): compare `cam_world` with the camera bone and add the fixed correction to `cam_world`, not to `MESH_TO_RIG`; if the hands drift off the rifle, check `overlay.mp4` (Task 8 Step 3) first, because the problem is probably upstream; if fingers twist, the MANO rest pose differs from the rig's: pick one finger bone, compare a flat-hand frame in Blender, and add a per-bone constant rotation applied before keying.
+Temporarily append this after `cam_world` is set in `retarget.py` (not committed), run, and open the PNG. At rest the rifle should land where the FPS rig holds it (lower right of frame, pointing away from the camera). If it is rotated 90 degrees the camera convention is wrong (see Step 4):
+```python
+import cv2, json, trimesh
+from mocap.transforms import FLIP
+K = np.array(json.loads((clip / "camera.json").read_text())["K"])
+T_cam_mesh_rest = np.linalg.inv(FLIP) @ np.linalg.inv(cam_world)  # rest world -> OpenCV camera space
+v = trimesh.load(clip.parent.parent / "rigs" / "m4_gun.obj", force="mesh").vertices
+p = v @ T_cam_mesh_rest[:3, :3].T + T_cam_mesh_rest[:3, 3]
+uvw = p @ K.T
+uv = uvw[:, :2] / uvw[:, 2:3]
+img = np.zeros((1080, 1920, 3), np.uint8)
+for u, w in uv[p[:, 2] > 0].astype(int):
+    if 0 <= u < img.shape[1] and 0 <= w < img.shape[0]:
+        img[w, u] = (255, 255, 255)
+cv2.imwrite(str(clip / "rest_projection.png"), img)
+```
 
-- [ ] **Step 4: Check the `.glb` in Godot**
+- [ ] **Step 4: Judge by eye and tune**
+
+Open `clips/m4_pullout/retarget.blend` in Blender and play it. Check: (a) the rifle comes up from below as in the source clip; (b) the hands follow the rifle and the forearms bend sensibly; (c) fingers curl rather than twist. Fixes, in this order: if the rifle is rotated 90 or 180 degrees relative to the clip, the camera's axes probably differ from the Blender camera convention (it should look along its local -Z with +Y up): compare `cam_world` with the camera object/bone (and the Step 3 projection) and add the fixed correction to `cam_world`, not to `GUN_REST`; if the hands drift off the rifle, check `overlay.mp4` (Task 8 Step 3) first, because the problem is probably upstream; if the hands are rotated wrongly while the wrists sit right, confirm `to_world` has no rest matrix and that the Copy Rotation constraint targets the keyed empty; if fingers twist, the MANO rest pose differs from the rig's, and a single pre-multiplied constant is not enough: the correct fix is a per-bone change of basis `R_bone = C^-1 @ R_mano @ C`, where `C` is found per bone from a flat-hand frame (compare the MANO flat-hand rotation of that joint with the rig bone's rest orientation in Blender), applied before keying. The left hand needs mirroring handled too (WiLoR flips left-hand crops, so `C` for left bones includes a reflection, or the left rotations are un-mirrored first).
+
+- [ ] **Step 5: Check the `.glb` in Godot**
 
 Copy `clips/m4_pullout/m4_pullout.glb` into a scratch Godot project (not Lone Asset yet), open it, and play the `m4_pullout` animation in an `AnimationPlayer` on its imported scene. Expected: the same motion as the `.blend`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add blender/retarget.py clips/m4_pullout/retarget.blend clips/m4_pullout/m4_pullout.glb
@@ -1340,5 +1395,5 @@ M5 (copying the `.glb` into Lone Asset and registering the animation name in the
 
 - **Spec coverage:** decisions (markerless path, M4 mesh, fov 90, locked camera, hands-first order, SOURCE.md, reference-only) are in Global Constraints and Tasks 1, 7, 8. Milestones M1-M4 map to Tasks 8 (hands, gun), 4+6 (align), 9 (retarget); M5 is the developer's step; M6 is deferred as the spec says. Stage table is covered by Tasks 1, 6, 8, 9. Init-frame choice and forward/backward tracking are in Tasks 1 and 8. Right-hand fallback for lost gun frames is `align.run` (Task 4), with `gun_source` as the score record (the spec's wording about `score` is satisfied by `gun_source`, which keeps `score` for detector confidence). Errors: `ContractError` plus clear `SystemExit` messages (Tasks 3, 6). Testing: Tasks 2-6 pytest; GPU and Blender by overlay and playback.
 - **Spec deviation recorded:** the camera-to-Blender conversion formula (Task 1 Step 5 amends the spec).
-- **Placeholder scan:** the adapter lines in Task 8 are known unknowns, stated as such with a verification step, not hidden TODOs. `MESH_TO_RIG` and finger rest offsets are tuned by eye in Task 9 Step 3 with concrete instructions.
+- **Placeholder scan:** the adapter lines in Task 8 are known unknowns, stated as such with a verification step, not hidden TODOs. `GUN_REST` (the gun bone's rest matrix, applied to the gun bone only) is read from the rig, and the per-bone finger change of basis `R_bone = C^-1 @ R_mano @ C` is tuned by eye in Task 9 Step 4 with concrete instructions.
 - **Type consistency:** `align.run` output keys match what `overlay.draw_frame` reads (`gun_valid`, `gun_source`, `T_cam_gun`, `{side}_valid`, `{side}_keypoints`, `{side}_T_cam_wrist`, `{side}_grip_weight`) and what `retarget.py` reads. `contracts` field names match the notebook's `empty_hand()`.
