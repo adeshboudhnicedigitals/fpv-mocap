@@ -1,27 +1,54 @@
-# M4 rig notes (Lone Asset `M4.fbx`)
+# Assets for the retarget: `fps_arms.glb` and `m4a1_single.glb`
 
-Inspected with Blender 5.2.3 LTS (`C:\Program Files\Blender Foundation\Blender 5.2\blender.exe`) via `blender/list_bones.py`.
-Source: `lone-asset/content/weapons/m4/source/M4.fbx`, copied to `rigs/M4.fbx` (gitignored).
+These replace the Lone Asset `M4.fbx` rig (the old notes are in git history, commit 30639fd). Inspected with
+Blender 5.2.3 (`C:\Program Files\Blender Foundation\Blender 5.2\blender.exe`) through the glTF importer, using
+`blender/inspect_glb.py`. Both files are Sketchfab exports that sit in the repo root, uncommitted.
 
-## Scale
-FBX imports in **metres** (gun `Main` longest side 0.865). `global_scale=1.0` is correct; no cm fix needed.
+## Gun: `m4a1_single.glb`
 
-## Objects
-- Armature object: `Armature`
-- **Gun mesh: `Main`** (dims 0.067 x 0.238 x 0.865 m). Child mesh `Safety`; other parts: `Bolt`, `BoltCatch`, `Mag1`, `Mag2`, `Trigger`, `Bullet5_56x45mm`(.001)
-- Hand mesh: `Hand_Mesh`; camera object: `FPS_Camera`; empty: `Hand`
-- Export: `rigs/m4_gun.obj`, `DIMS_M (0.067, 0.238, 0.865)`. Exported in world space (FBX placement kept, verts around z~1.38), not recentred; OBJ bbox x 0.067, y 0.865 (long axis, y -0.632..0.233), z 0.238 (1.30..1.54).
+- Made from `m4a1.glb` with `blender/dedupe_gun.py`: the original held two identical rifles (`base`, `base.001`).
+- Rigid, **no skin, no animation**. Metres. Hierarchy: `Sketchfab_model/…fbx/RootNode/<parts>`; the rifle is the
+  subtree under node **`base`** (21 meshes, 6 of them rounds and shells). Still present and NOT part of the
+  rifle: a spare magazine `magazine.002` (8 meshes) and about 28 loose `shell*` casings.
+- After the glTF import, in Blender world axes (Z up), the rifle subtree minus rounds and shells (15 parts)
+  measures 0.069 x 0.882 x 0.371 m, lying along **+Y**, bbox y -0.466..0.416, z -0.021..0.349. Nodes carry
+  transforms, so do not trust per-mesh dimensions.
+- `rigs/m4_gun.obj` (gitignored) is that rifle exported with `blender/export_gun_mesh.py`: world axes, metres, not
+  recentred. FoundationPose returns poses of THIS frame (the Blender world frame of the import). The previous
+  tracking mesh is kept as `rigs/m4_gun_lone_asset.obj`.
+- Because the rifle has no bone, the animated gun is an empty `weapon_root` at the world origin with the imported
+  `base` subtree parented to it, so the rest matrix of the gun is the identity and the gun pose is simply
+  `cam_world @ FLIP @ T_cam_gun`.
 
-## Bones (armature `Armature`)
-- Root `M4_Root`; gun bone **`Main_j`** (child of M4_Root; children `Mag1_j`, `Mag2_j`, `Bolt_j`, `BoltCatch_j`, `Trigger_j`)
-- Camera bone: **`FPS_Camera_j`** (child of `M4_Root`); `Spine` is also a child of `M4_Root`
-- Arms: `Spine` -> `RightArm`/`LeftArm` -> `RightForeArm`/`LeftForeArm` -> `RightHand`/`LeftHand`
-- Fingers, 4 bones each (note `4` exists, tip): `{Right,Left}Hand{Thumb,Index,Middle,Ring,Pinky}{1,2,3,4}`, chained 1->2->3->4, 1 parented to the hand. E.g. `RightHandIndex1..4`.
-- MANO finger order to use: index, middle, pinky, ring, thumb (names `Index`, `Middle`, `Pinky`, `Ring`, `Thumb`).
+## Arms: `fps_arms.glb`
 
-## Notes for retargeting
-- Only `Main` is exported as the tracking mesh, on purpose: the gun is tracked as one rigid body, so moving parts (`Bolt`, `Mag1`, `Trigger`, ...) are left out.
-- The OBJ export uses `forward_axis="Y"`, `up_axis="Z"`: that is Blender's identity axis conversion, so the OBJ frame equals the FBX world frame. FoundationPose poses therefore map FBX-world points to camera space, and the gun bone needs its rest world matrix `B_rest` applied (`GUN_REST` in `blender/retarget.py`, gun bone only; wrists use no rest matrix).
-- MANO has 3 joints per finger, so map the rig's finger bones 1..3 (bone 4 is the tip and gets no rotation).
-- The FBX may carry its own animation (a binary grep finds `AnimationStack`): `retarget.py` calls `arm.animation_data_clear()` and keys a fresh action named after the clip. `GUN_REST` and `cam_world` come from rest data (`arm.data.bones[...].matrix_local`), not the posed bone. Prefer the `FPS_Camera` object's `matrix_world` (it is a camera object) over the `FPS_Camera_j` bone.
-- Pending check (Task 9 Step 2): `export_gun_mesh.py` exported the mesh at the import's current pose. Print the imported rig's gun bone pose matrix and confirm it equals its rest matrix at the frame used, or set `arm.data.pose_position = 'REST'` in both `blender/export_gun_mesh.py` and `blender/retarget.py` and re-export. `export_gun_mesh.py` has not been edited for this yet.
+- One skinned mesh, one skin of 47 joints, **no animation**. Armature object `Object_3`, object scale 1, but the
+  numbers are in **centimetres**: upper arm 25.9, forearm about 25.5 (so apply 0.01 to get metres, about 0.26 m
+  each). Also checked in Blender: an `Icosphere` object appears on import; it is the importer's bone-display
+  helper, not part of the asset.
+- Faces Blender **-Y** (glTF forward maps to -Y). Rest shoulders at (+-24.58, 32.32, 22.99) cm; rest wrists at
+  about (+-19.5, -16.9, 10.6) cm; fingertips about y = -26 cm.
+- Bones (parent chain): `_rootJoint` > `L_arm_01` > `L_elbow_02` > `L_wrist_03` > fingers; `_rootJoint` >
+  `R_arm_023` > `R_elbow_024` > `R_wrist_025` > fingers.
+  - `*_arm_*` is the upper arm, `*_elbow_*` the forearm (its head is the elbow), `*_wrist_*` the hand.
+  - Fingers, 4 bones each, chained 1 > 2 > 3 > 4, bone 1 parented to the wrist bone: `thumb`, `point` (index),
+    `middle`, `ring`, `pink` (little). Example: `R_point1_030`.
+  - **The numeric suffixes are irregular** (`L_middle2_00`, `L_point1_08`, `L_point3_010`), so look bones up by
+    the prefix `f"{S}_{finger}{k}_"` with S in `L`/`R`, never by full name.
+  - MANO has 3 joints per finger: use bones 1..3, leave 4 (the tip) alone. MANO finger order is
+    index, middle, pinky, ring, thumb = `point`, `middle`, `pink`, `ring`, `thumb`.
+- **Bone tails are importer guesses.** `R_elbow_024` has head at the elbow but its tail points up the Z axis
+  (length 25), not at the wrist. Blender's IK drives the TAIL of the constrained bone to the target, so before
+  adding IK set each tail to its child's head in edit mode: `arm_01.tail = elbow_02.head`,
+  `elbow_02.tail = wrist_03.head`. At identity pose this changes nothing on screen (deformation is relative
+  to rest), but verify by eye.
+
+## Camera and scale for the retarget
+
+- The glb files contain no camera. Put a camera object in the scene: at x = 0, centred between the shoulders,
+  0.15 m in front of them and 0.22 m above them (the plan's FPP offsets): about (0, 0.173, 0.45) m after the 0.01
+  scale, rotation euler (90 deg, 0, 180 deg) so it looks along -Y with +Z up. `cam_world` is that object's
+  `matrix_world` (Blender camera convention, looks along local -Z), as `cam_to_world` expects.
+- Arm reach with 0.01 scale is about 0.52 m shoulder to wrist, shorter than a human arm; if the left wrist target
+  (support hand on the handguard) is out of reach, scale the arms armature up uniformly by one factor (try
+  1.15-1.25) and keep the shoulder positions relative to the camera.
