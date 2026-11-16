@@ -5,6 +5,7 @@
 
 # %% setup
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,10 @@ from scipy.spatial.transform import Rotation
 
 ROOT = Path("/kaggle/working/fpv-mocap")  # Colab: Path("/content/fpv-mocap")
 CLIP = ROOT / "clips" / "m4_pullout"
+DA_DIR = Path("/kaggle/working/Depth-Anything-V2/metric_depth")  # Colab: Path("/content/Depth-Anything-V2/metric_depth")
+FP_DIR = Path("/kaggle/working/FoundationPose")  # Colab: Path("/content/FoundationPose")
+# Set after viewing overlay.mp4: (first, last) 0-based inclusive frames where the gun track is good.
+GUN_VALID_RANGE = (None, None)
 sys.path.insert(0, str(ROOT))
 from mocap.contracts import save_gun, save_hands  # noqa: E402
 from mocap.frames import list_frames  # noqa: E402
@@ -27,6 +32,8 @@ N = len(frames)
 init = meta["init_frame"] - 1  # 0-based index
 
 # %% install (once per session)
+# ADAPTER: the "sam2" PyPI name may not be Meta's package; Meta's official install is from the git repo
+# (pip install git+https://github.com/facebookresearch/sam2.git). Confirm and change if needed.
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "wilor-mini", "sam2", "trimesh"], check=True)
 # Depth Anything V2 and FoundationPose are cloned and built as their READMEs describe:
 #   git clone https://github.com/DepthAnything/Depth-Anything-V2 ; cd metric_depth ; download the
@@ -40,6 +47,7 @@ from wilor_mini.pipelines.wilor_hand_pose3d_estimation_pipeline import (  # noqa
     WiLorHandPose3dEstimationPipeline,
 )
 
+printed_keys = False
 pipe = WiLorHandPose3dEstimationPipeline(device="cuda", dtype=torch.float16)  # ADAPTER: constructor args
 
 # ADAPTER switches, decide after reading the first-run printout:
@@ -73,7 +81,9 @@ for i, path in enumerate(frames):
     rgb = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
     for out in pipe.predict(rgb):  # ADAPTER: returns a list of dicts, one per detected hand
         p = out["wilor_preds"]  # ADAPTER
-        if i == init:
+        if not printed_keys:
+            printed_keys = True
+            print("first detection at frame", i)
             print("WiLoR keys:", list(out.keys()), list(p.keys()))  # ADAPTER check
             print({k: np.asarray(v).shape for k, v in p.items()})  # ADAPTER check: axis-angle vs matrix shapes
         side = "right" if out["is_right"] else "left"  # ADAPTER
@@ -99,10 +109,11 @@ save_hands(CLIP / "hands.npz", hands)
 print({s: int(hands[s]["valid"].sum()) for s in hands}, "valid frames of", N)
 
 # %% depth: Depth Anything V2 metric (run from the cloned metric_depth folder; ADAPTER)
+sys.path.insert(0, str(DA_DIR))
 from depth_anything_v2.dpt import DepthAnythingV2  # noqa: E402  ADAPTER
 
 model = DepthAnythingV2(encoder="vitl", features=256, out_channels=[256, 512, 1024, 1024], max_depth=20)
-model.load_state_dict(torch.load("checkpoints/depth_anything_v2_metric_hypersim_vitl.pth", map_location="cpu"))
+model.load_state_dict(torch.load(DA_DIR / "checkpoints" / "depth_anything_v2_metric_hypersim_vitl.pth", map_location="cpu"))
 model = model.to("cuda").eval()
 (CLIP / "depth").mkdir(exist_ok=True)
 for i, path in enumerate(frames):
@@ -127,15 +138,13 @@ overlay[masks[0] > 0] = (0.5 * overlay[masks[0] > 0] + [127, 0, 0]).astype(np.ui
 cv2.imwrite(str(CLIP / "masks" / "gun_mask_check.png"), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
 # Look at gun_mask_check.png: the mask must cover the rifle only. If not, change gun_click in meta.json.
 
-# %% gun: FoundationPose, forward then backward from the init frame (ADAPTER)
+# %% gun: FoundationPose, register at init, track forward then backward (ADAPTER)
 import trimesh  # noqa: E402
+
+sys.path.insert(0, str(FP_DIR))
 from estimater import FoundationPose, ScorePredictor, PoseRefinePredictor, dr  # noqa: E402  ADAPTER
 
 mesh = trimesh.load(ROOT / "rigs" / "m4_gun.obj", force="mesh")
-est = FoundationPose(  # ADAPTER: constructor args
-    model_pts=mesh.vertices, model_normals=mesh.vertex_normals, mesh=mesh,
-    scorer=ScorePredictor(), refiner=PoseRefinePredictor(), glctx=dr.RasterizeCudaContext(),
-)
 mask = cv2.imread(str(CLIP / "masks" / "gun_mask.png"), cv2.IMREAD_GRAYSCALE) > 0
 
 T_gun = np.tile(np.eye(4), (N, 1, 1))  # invalid frames keep identity
@@ -146,16 +155,45 @@ def rgb_depth(i):
     return (cv2.cvtColor(cv2.imread(str(frames[i])), cv2.COLOR_BGR2RGB), np.load(CLIP / "depth" / f"{i + 1:05d}.npy"))
 
 
-for order in (range(init, N), range(init, -1, -1)):
+# ADAPTER: FoundationPose loads assets by relative path, so it must run with cwd = its repo (from memory,
+# confirm on the first run). All paths passed to it above/below are absolute.
+prev_cwd = os.getcwd()
+os.chdir(FP_DIR)
+try:
+    est = FoundationPose(  # ADAPTER: constructor args
+        model_pts=mesh.vertices, model_normals=mesh.vertex_normals, mesh=mesh,
+        scorer=ScorePredictor(), refiner=PoseRefinePredictor(), glctx=dr.RasterizeCudaContext(),
+    )
     rgb, depth = rgb_depth(init)
-    pose = est.register(K=K, rgb=rgb, depth=depth, ob_mask=mask, iteration=5)  # ADAPTER
-    print("register pose shape:", np.asarray(pose).shape)  # ADAPTER check: expect (4, 4)
-    for i in order:
-        if i != init:
+    init_pose = np.asarray(est.register(K=K, rgb=rgb, depth=depth, ob_mask=mask, iteration=5), dtype=np.float64)  # ADAPTER
+    print("register pose shape:", init_pose.shape)  # ADAPTER check: expect (4, 4)
+    init_pose = init_pose.reshape(4, 4)
+    T_gun[init] = init_pose
+    gun_valid[init] = True
+    for order in (range(init + 1, N), range(init - 1, -1, -1)):
+        # track_one follows the estimator's last pose, so the backward pass must start from the init state
+        # again: re-register (ADAPTER; if the estimator exposes a reset to a given pose, use it instead).
+        # The saved init_pose stays the one written for frame init; the re-registered pose only seeds tracking.
+        if order.start != init + 1:
+            rgb, depth = rgb_depth(init)
+            est.register(K=K, rgb=rgb, depth=depth, ob_mask=mask, iteration=5)  # ADAPTER
+        for i in order:
             rgb, depth = rgb_depth(i)
             pose = est.track_one(rgb=rgb, depth=depth, K=K, iteration=2)  # ADAPTER
-        T_gun[i] = np.asarray(pose, dtype=np.float64).reshape(4, 4)
-        gun_valid[i] = True
-# Frames before the gun enters the view are not tracked reliably: after looking at overlay.mp4 set
-# gun_valid[:first_visible] = False and T_gun[:first_visible] = np.eye(4), then save again.
+            T_gun[i] = np.asarray(pose, dtype=np.float64).reshape(4, 4)
+            gun_valid[i] = True
+finally:
+    os.chdir(prev_cwd)
+
+# Tracking is only trustworthy while the gun is visible. Apply the range judged from overlay.mp4.
+first, last = GUN_VALID_RANGE
+if first is None and last is None:
+    print(f"WARNING: ALL {N} frames marked valid; set GUN_VALID_RANGE after checking overlay.mp4")
+else:
+    lo = 0 if first is None else first
+    hi = N - 1 if last is None else last
+    outside = (np.arange(N) < lo) | (np.arange(N) > hi)
+    gun_valid[outside] = False
+    T_gun[outside] = np.eye(4)
+print("gun valid on", int(gun_valid.sum()), "of", N, "frames")
 save_gun(CLIP / "gun.npz", {"T_cam_gun": T_gun, "valid": gun_valid, "score": gun_valid.astype(float)})

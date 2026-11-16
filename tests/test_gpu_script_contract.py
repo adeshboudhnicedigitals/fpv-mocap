@@ -1,12 +1,16 @@
 """The GPU script (notebooks/gpu_stages.py) cannot run here; this mirrors the arrays it builds and
 proves its output layout round-trips through the contracts and is accepted by align.run."""
+import ast
+from pathlib import Path
+
 import numpy as np
 from scipy.spatial.transform import Rotation
 
 from mocap import align
-from mocap.contracts import load_gun, load_hands, save_gun, save_hands
+from mocap.contracts import HAND_SHAPES, load_gun, load_hands, save_gun, save_hands
 
 N = 20
+SCRIPT = Path(__file__).resolve().parents[1] / "notebooks" / "gpu_stages.py"
 
 
 def empty_hand():  # same shapes/dtypes as the script's empty_hand()
@@ -19,6 +23,7 @@ def empty_hand():  # same shapes/dtypes as the script's empty_hand()
     }
 
 
+# The float16 cast below documents the cast WiLoR output needs; it does not guard script behaviour.
 def test_script_layout_round_trips_and_aligns(tmp_path):
     rng = np.random.default_rng(0)
     hands = {"left": empty_hand(), "right": empty_hand()}
@@ -45,3 +50,18 @@ def test_script_layout_round_trips_and_aligns(tmp_path):
     out = align.run(loaded_gun, loaded_hands)
     assert out["T_cam_gun"].shape == (N, 4, 4)
     assert np.isfinite(out["T_cam_gun"]).all()
+
+
+def test_script_compiles():
+    compile(SCRIPT.read_text(encoding="utf-8"), "gpu_stages.py", "exec")
+
+
+def test_script_empty_hand_matches_contract_shapes():
+    tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+    fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "empty_hand")
+    ns = {"np": np, "N": N}
+    exec(compile(ast.Module([fn], []), "empty_hand", "exec"), ns)
+    hand = ns["empty_hand"]()
+    assert set(hand) == set(HAND_SHAPES)
+    for key, shape in HAND_SHAPES.items():
+        assert hand[key].shape == (N, *shape), key
