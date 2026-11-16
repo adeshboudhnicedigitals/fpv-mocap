@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+clips/*/rgb/
+clips/*/depth/
+clips/*/masks/
+*.mp4
+*.mov
+*.blend1
+rigs/
