@@ -263,8 +263,9 @@ from estimater import FoundationPose, ScorePredictor, PoseRefinePredictor, dr  #
 
 mesh = trimesh.load(ROOT / "rigs" / "m4_gun.obj", force="mesh")
 # FoundationPose scores ~250 pose hypotheses against the full-size depth map: at 1920x1080 that is ~2 GB per
-# tensor and runs out of a 15 GB T4. Run it at FP_SCALE; K scales with the image, poses stay in the camera frame.
-FP_SCALE = 0.5
+# tensor and runs out of a 15 GB T4 (half size still did, at 12 GB). Run it at FP_SCALE; K scales with the image, poses stay in the camera frame.
+FP_SCALE = 0.35
+FP_INPLANE_STEP = 90  # in-plane rotation step in degrees: 90 -> ~170 hypotheses instead of ~250 at the default 60
 K_fp = np.asarray(K, dtype=np.float64).copy()
 K_fp[:2] *= FP_SCALE
 mask = cv2.imread(str(CLIP / "masks" / "gun_mask.png"), cv2.IMREAD_GRAYSCALE)
@@ -290,6 +291,9 @@ try:
         model_pts=mesh.vertices, model_normals=mesh.vertex_normals, mesh=mesh,
         scorer=ScorePredictor(), refiner=PoseRefinePredictor(), glctx=dr.RasterizeCudaContext(),
     )
+    est.make_rotation_grid(min_n_views=40, inplane_step=FP_INPLANE_STEP)  # fewer pose hypotheses = less GPU memory
+    gc.collect()
+    torch.cuda.empty_cache()
     print(f"cuda:{FP_GPU} allocated before register: {torch.cuda.memory_allocated(FP_GPU) / 2**30:.1f} GiB")
     rgb, depth = rgb_depth(init)
     init_pose = np.asarray(est.register(K=K_fp, rgb=rgb, depth=depth, ob_mask=mask, iteration=5), dtype=np.float64)  # ADAPTER
