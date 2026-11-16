@@ -58,7 +58,7 @@ unreadable mesh, init frame without a mask). Lost-tracking frames are `valid = F
 
 ## Testing
 
-- `pytest` on the pure maths in `align.py`: CV-to-Blender basis change (`M @ T @ M^-1`), grip
+- `pytest` on the pure maths: camera-to-Blender conversion (`cam_world @ FLIP @ T`, in `transforms.py`), grip
   detection, blending, Savitzky-Golay smoothing, using synthetic poses with known answers.
 - GPU stages and Blender are checked by the overlay and by playing the `.blend`, not by pytest.
 

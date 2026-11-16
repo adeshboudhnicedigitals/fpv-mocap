@@ -88,21 +88,16 @@ between bones so constraints see the new values.
 
 ## Milestones
 
-Each one ends with something to look at.
+Each one ends with something to look at. First target: `clips/m4_pullout` (see
+`docs/superpowers/specs/2026-11-16-m4-pullout-first-target-design.md`).
 
-- M0 Setup (done): uv project, `frames` and `camera` stages, one test clip. Check: frames on disk,
-  `camera.json` plausible (principal point near the centre).
-- M1 Gun: `gun_markers` on a self-recorded clip. Check: overlay shows the gun's outline staying on
-  the replica through the reload.
-- M2 Hands: WiLoR in the notebook. Check: overlay shows both hands' keypoints on the hands; note the
-  frames where they are lost (expected during the magazine swap).
-- M3 Align: grip locking and smoothing, with unit tests. Check: overlay shows the gripping hands
-  stuck to the gun and the support hand leaving and coming back.
-- M4 Retarget: `retarget.py` on the M4 rig. Check: the `.blend` plays the reload; the `.glb` imports
-  into Godot.
-- M5 In game: the reload plays on the rifle in Lone Asset. Check: the developer plays it.
-- M6 Footage without markers: FoundationPose path for film or real POV footage, using the same
-  align and retarget stages.
+- M0 Setup (done): uv project, `frames` and `camera` stages.
+- M1 Hands: WiLoR on a GPU -> `hands.npz`. Check: overlay shows both hands' keypoints.
+- M2 Gun: SAM 2 + Depth Anything + FoundationPose with the M4 mesh -> `gun.npz`. Check: overlay axes follow the gun.
+- M3 Align: grip locking and smoothing, with unit tests. Check: gripping hands stay on the gun.
+- M4 Retarget: `retarget.py` on the M4 rig. Check: the `.blend` plays the clip; the `.glb` imports into Godot.
+- M5 In game: the clip plays on the rifle in Lone Asset.
+- M6 Marker/PnP path (`gun_markers.py`) for self-recorded clips, and moving-camera footage.
 
 ## Source footage
 
