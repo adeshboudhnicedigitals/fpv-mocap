@@ -245,8 +245,11 @@ import trimesh  # noqa: E402
 # FoundationPose needs most of a 15 GB T4 on its own. Run it on the second GPU when there is one (Kaggle
 # T4 x2: the other stages stay on GPU 0); it builds its tensors on the current CUDA device.
 # With a single GPU, free the earlier stages' models instead.
-for name in ("pipe", "owl", "owl_proc", "model", "predictor"):
+for name in ("pipe", "owl", "owl_proc", "model", "predictor", "est"):  # "est": a previous run of this cell
     globals().pop(name, None)
+for attr in ("last_traceback", "last_value", "last_type", "last_exc"):  # a failed run's traceback pins its tensors
+    if hasattr(sys, attr):
+        setattr(sys, attr, None)
 gc.collect()
 torch.cuda.empty_cache()
 FP_GPU = 1 if torch.cuda.device_count() > 1 else 0
@@ -287,6 +290,7 @@ try:
         model_pts=mesh.vertices, model_normals=mesh.vertex_normals, mesh=mesh,
         scorer=ScorePredictor(), refiner=PoseRefinePredictor(), glctx=dr.RasterizeCudaContext(),
     )
+    print(f"cuda:{FP_GPU} allocated before register: {torch.cuda.memory_allocated(FP_GPU) / 2**30:.1f} GiB")
     rgb, depth = rgb_depth(init)
     init_pose = np.asarray(est.register(K=K_fp, rgb=rgb, depth=depth, ob_mask=mask, iteration=5), dtype=np.float64)  # ADAPTER
     print("register pose shape:", init_pose.shape)  # ADAPTER check: expect (4, 4)
