@@ -107,7 +107,7 @@ def find_hands(rgb):
     with torch.no_grad():
         out = owl(**inputs)
     side = max(h, w)  # OWLv2 pads the image to a square
-    res = owl_proc.post_process_object_detection(out, threshold=HAND_SCORE, target_sizes=torch.tensor([[side, side]]))[0]
+    res = owl_proc.image_processor.post_process_object_detection(out, threshold=HAND_SCORE, target_sizes=torch.tensor([[side, side]]))[0]
     boxes, scores = res["boxes"].cpu(), res["scores"].cpu()
     keep = nms(boxes, scores, 0.3)[:2]
     boxes, scores = boxes[keep].numpy(), scores[keep].numpy()
