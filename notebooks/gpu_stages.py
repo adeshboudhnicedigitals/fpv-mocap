@@ -14,10 +14,11 @@ import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-ROOT = Path("/kaggle/working/fpv-mocap")  # Colab: Path("/content/fpv-mocap")
+BASE = Path("/content") if Path("/content").exists() else Path("/kaggle/working")  # Colab or Kaggle
+ROOT = BASE / "fpv-mocap"
 CLIP = ROOT / "clips" / "m4_pullout"
-DA_DIR = Path("/kaggle/working/Depth-Anything-V2/metric_depth")  # Colab: Path("/content/Depth-Anything-V2/metric_depth")
-FP_DIR = Path("/kaggle/working/FoundationPose")  # Colab: Path("/content/FoundationPose")
+DA_DIR = BASE / "Depth-Anything-V2" / "metric_depth"
+FP_DIR = BASE / "FoundationPose"
 # Set after viewing overlay.mp4: (first, last) 0-based inclusive frames where the gun track is good.
 GUN_VALID_RANGE = (None, None)
 sys.path.insert(0, str(ROOT))
