@@ -238,7 +238,16 @@ assert (FP_DIR / "weights" / "2023-10-28-18-33-37").exists() and (FP_DIR / "weig
     "weights missing: download both folders from the FoundationPose Google Drive into FoundationPose/weights/"
 
 # %% gun: FoundationPose, register at init, track forward then backward (ADAPTER)
+import gc  # noqa: E402
+
 import trimesh  # noqa: E402
+
+# Free the earlier stages' models: FoundationPose needs most of a 15 GB T4 on its own.
+for name in ("pipe", "owl", "owl_proc", "model", "predictor"):
+    globals().pop(name, None)
+gc.collect()
+torch.cuda.empty_cache()
+print(f"GPU free after cleanup: {torch.cuda.mem_get_info()[0] / 2**30:.1f} GiB")
 
 sys.path.insert(0, str(FP_DIR))
 sys.path.insert(0, str(FP_DIR / "mycpp" / "build"))
