@@ -259,14 +259,23 @@ importlib.invalidate_caches()
 from estimater import FoundationPose, ScorePredictor, PoseRefinePredictor, dr  # noqa: E402  ADAPTER
 
 mesh = trimesh.load(ROOT / "rigs" / "m4_gun.obj", force="mesh")
-mask = cv2.imread(str(CLIP / "masks" / "gun_mask.png"), cv2.IMREAD_GRAYSCALE) > 0
+# FoundationPose scores ~250 pose hypotheses against the full-size depth map: at 1920x1080 that is ~2 GB per
+# tensor and runs out of a 15 GB T4. Run it at FP_SCALE; K scales with the image, poses stay in the camera frame.
+FP_SCALE = 0.5
+K_fp = np.asarray(K, dtype=np.float64).copy()
+K_fp[:2] *= FP_SCALE
+mask = cv2.imread(str(CLIP / "masks" / "gun_mask.png"), cv2.IMREAD_GRAYSCALE)
+mask = cv2.resize(mask, None, fx=FP_SCALE, fy=FP_SCALE, interpolation=cv2.INTER_NEAREST) > 0
 
 T_gun = np.tile(np.eye(4), (N, 1, 1))  # invalid frames keep identity
 gun_valid = np.zeros(N, bool)
 
 
 def rgb_depth(i):
-    return (cv2.cvtColor(cv2.imread(str(frames[i])), cv2.COLOR_BGR2RGB), np.load(CLIP / "depth" / f"{i + 1:05d}.npy"))
+    rgb = cv2.cvtColor(cv2.imread(str(frames[i])), cv2.COLOR_BGR2RGB)
+    depth = np.load(CLIP / "depth" / f"{i + 1:05d}.npy")
+    return (cv2.resize(rgb, None, fx=FP_SCALE, fy=FP_SCALE, interpolation=cv2.INTER_AREA),
+            cv2.resize(depth, None, fx=FP_SCALE, fy=FP_SCALE, interpolation=cv2.INTER_NEAREST))
 
 
 # ADAPTER: FoundationPose loads assets by relative path, so it must run with cwd = its repo (from memory,
@@ -279,7 +288,7 @@ try:
         scorer=ScorePredictor(), refiner=PoseRefinePredictor(), glctx=dr.RasterizeCudaContext(),
     )
     rgb, depth = rgb_depth(init)
-    init_pose = np.asarray(est.register(K=K, rgb=rgb, depth=depth, ob_mask=mask, iteration=5), dtype=np.float64)  # ADAPTER
+    init_pose = np.asarray(est.register(K=K_fp, rgb=rgb, depth=depth, ob_mask=mask, iteration=5), dtype=np.float64)  # ADAPTER
     print("register pose shape:", init_pose.shape)  # ADAPTER check: expect (4, 4)
     init_pose = init_pose.reshape(4, 4)
     T_gun[init] = init_pose
@@ -290,10 +299,10 @@ try:
         # The saved init_pose stays the one written for frame init; the re-registered pose only seeds tracking.
         if order.start != init + 1:
             rgb, depth = rgb_depth(init)
-            est.register(K=K, rgb=rgb, depth=depth, ob_mask=mask, iteration=5)  # ADAPTER
+            est.register(K=K_fp, rgb=rgb, depth=depth, ob_mask=mask, iteration=5)  # ADAPTER
         for i in order:
             rgb, depth = rgb_depth(i)
-            pose = est.track_one(rgb=rgb, depth=depth, K=K, iteration=2)  # ADAPTER
+            pose = est.track_one(rgb=rgb, depth=depth, K=K_fp, iteration=2)  # ADAPTER
             T_gun[i] = np.asarray(pose, dtype=np.float64).reshape(4, 4)
             gun_valid[i] = True
 finally:
