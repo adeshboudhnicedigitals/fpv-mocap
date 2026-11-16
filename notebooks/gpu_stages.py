@@ -33,9 +33,11 @@ N = len(frames)
 init = meta["init_frame"] - 1  # 0-based index
 
 # %% install (once per session)
-# ADAPTER: the "sam2" PyPI name may not be Meta's package; Meta's official install is from the git repo
-# (pip install git+https://github.com/facebookresearch/sam2.git). Confirm and change if needed.
-subprocess.run([sys.executable, "-m", "pip", "install", "-q", "wilor-mini", "sam2", "trimesh"], check=True)
+# wilor-mini and SAM 2 are not on PyPI under these names: both install from their git repos.
+# SAM2_BUILD_ALLOW_ERRORS skips SAM 2's optional CUDA extension if it fails to build (not needed for one mask).
+env = {**os.environ, "SAM2_BUILD_ALLOW_ERRORS": "1"}
+for target in ["git+https://github.com/warmshao/WiLoR-mini", "git+https://github.com/facebookresearch/sam2.git", "trimesh"]:
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", target], check=True, env=env)
 # Depth Anything V2 and FoundationPose are cloned and built as their READMEs describe:
 #   git clone https://github.com/DepthAnything/Depth-Anything-V2 ; cd metric_depth ; download the
 #   depth_anything_v2_metric_hypersim_vitl.pth checkpoint
