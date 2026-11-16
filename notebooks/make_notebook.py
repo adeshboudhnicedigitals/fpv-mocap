@@ -8,7 +8,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
-BOOTSTRAP = '''# Run first. Clones the repo (footage and tracking mesh are in it), then extracts the frames.
+BOOTSTRAP = '''# Run first. Clones the repo (footage and tracking mesh are in it) and puts it on the latest main.
 import os, subprocess, sys
 from pathlib import Path
 
@@ -28,8 +28,17 @@ if not ROOT.exists():
             pass
     url = REPO.replace("https://", f"https://{token}@") if token else REPO
     subprocess.run(["git", "clone", "-b", "main", url, str(ROOT)], check=True, cwd=BASE)
-subprocess.run(["git", "pull", "--ff-only"], check=True, cwd=ROOT)
+subprocess.run(["git", "fetch", "origin"], check=True, cwd=ROOT)
+subprocess.run(["git", "checkout", "main"], check=True, cwd=ROOT)  # an older clone may sit on another branch
+subprocess.run(["git", "pull", "--ff-only", "origin", "main"], check=True, cwd=ROOT)
+'''
 
+LOAD = '''# Extract the frames from the committed clip (skipped when rgb/ already has them).
+import sys
+from pathlib import Path
+
+BASE = Path("/content") if Path("/content").exists() else Path("/kaggle/working")
+ROOT = BASE / "fpv-mocap"
 CLIP = ROOT / "clips" / "m4_pullout"
 sys.path.insert(0, str(ROOT))
 from mocap.frames import extract
