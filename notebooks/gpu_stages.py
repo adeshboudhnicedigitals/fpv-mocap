@@ -242,12 +242,16 @@ import gc  # noqa: E402
 
 import trimesh  # noqa: E402
 
-# Free the earlier stages' models: FoundationPose needs most of a 15 GB T4 on its own.
+# FoundationPose needs most of a 15 GB T4 on its own. Run it on the second GPU when there is one (Kaggle
+# T4 x2: the other stages stay on GPU 0); it builds its tensors on the current CUDA device.
+# With a single GPU, free the earlier stages' models instead.
 for name in ("pipe", "owl", "owl_proc", "model", "predictor"):
     globals().pop(name, None)
 gc.collect()
 torch.cuda.empty_cache()
-print(f"GPU free after cleanup: {torch.cuda.mem_get_info()[0] / 2**30:.1f} GiB")
+FP_GPU = 1 if torch.cuda.device_count() > 1 else 0
+torch.cuda.set_device(FP_GPU)
+print(f"{torch.cuda.device_count()} GPUs; FoundationPose on cuda:{FP_GPU}, {torch.cuda.mem_get_info(FP_GPU)[0] / 2**30:.1f} GiB free")
 
 sys.path.insert(0, str(FP_DIR))
 sys.path.insert(0, str(FP_DIR / "mycpp" / "build"))
